@@ -1,0 +1,174 @@
+---
+title: "Fibrosis_ORA"
+author: "Eren Kumak"
+date: "2026-05-15"
+output: html_document
+---
+
+```{r libraries, echo=FALSE}
+library(writexl)
+library(GEOquery)
+library(readxl)
+library(enrichplot)
+library(igraph)
+library(ggraph)
+library(msigdbr)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggplot2)
+library(dorothea)
+library(dplyr)
+library(biomaRt)
+library(stats)
+library(viper)
+library(Biobase)
+library(decoupleR)
+library(tibble)
+library(tidyr)
+library(OmnipathR)
+```
+
+```{r data_load}
+overview <- read_xlsx("overall_meta_analysis_overview_directions_fibrosis.xlsx")
+```
+
+```{r}
+cutoff <- quantile(overview$total, 0.95)
+print(cutoff)
+
+selected_genes <- overview[overview$total >= cutoff,]$Gene
+```
+
+
+```{r over_representation_analysis}
+##### MSigDB
+genesets <- c("H","C1","C2","C3","C4","C5","C6","C7","C8")
+
+for (i in genesets){
+msig_hallmark <- msigdbr(species = "Homo sapiens", category = i)
+hallmark_list <- msig_hallmark[, c("gs_name", "gene_symbol")]
+ora_hallmark <- enricher(gene = selected_genes,
+                         TERM2GENE = hallmark_list,
+                         pAdjustMethod = "BH",
+                         qvalueCutoff = 0.05)
+data_framed_ora <- as.data.frame(ora_hallmark)
+if (nrow(data_framed_ora) > 0){
+write_xlsx(data_framed_ora, paste("top_score/fibrosis_overview_95_msigdb_",i,".xlsx", sep=""))
+p <- barplot(ora_hallmark,
+             drop = TRUE,
+             showCategory = 10,
+             title = paste("MSigDB = ",i, " (Fibrosis)", sep = ""),
+             font.size = 10)
+
+# Save as 600 DPI PNG
+ggsave(paste("top_score/fibrosis_ORA_MSigDB_",i,".png", sep=""),
+       plot = p,
+       width = 8, height = 6, dpi = 600, units = "in")
+}
+}
+
+################################
+
+### DoRothEA ORA
+
+# Load high-confidence TF–target interactions
+data(dorothea_hs)
+dorothea_regulon <- dorothea_hs %>% 
+  filter(confidence %in% c("A", "B", "C"))
+
+# Create TERM2GENE format
+term2gene <- dorothea_regulon %>% dplyr::select(tf, target)
+
+ora_tf <- enricher(gene = selected_genes,
+                   TERM2GENE = term2gene,
+                   pAdjustMethod = "BH",
+                   qvalueCutoff = 0.05)
+
+head(as.data.frame(ora_tf))
+
+data_framed_ora <- as.data.frame(ora_tf)
+write_xlsx(data_framed_ora,"top_score/fibrosis_overview_95_ORA_DoRothEA.xlsx")
+p <- barplot(ora_tf, showCategory = 17, title = "TF Enrichment (DoRothEA) - (Fibrosis)")
+ggsave("top_score/fibrosis_ORA_DoRothEA.png",
+       plot = p,
+       width = 8, height = 6, dpi = 600, units = "in")
+
+################################ ORA - MSigDB - Directed
+
+selected_genes_upregulated <- overview[overview$Gene %in% selected_genes & overview$total_upregulated > overview$total_downregulated, ]$Gene
+
+selected_genes_downregulated <- overview[overview$Gene %in% selected_genes & overview$total_upregulated < overview$total_downregulated, ]$Gene
+
+genesets <- c("H","C1","C2","C3","C4","C5","C6","C7","C8")
+
+for (i in genesets){
+msig_hallmark <- msigdbr(species = "Homo sapiens", category = i)
+hallmark_list <- msig_hallmark[, c("gs_name", "gene_symbol")]
+
+ora_hallmark_upregulated <- enricher(gene = selected_genes_upregulated,
+                         TERM2GENE = hallmark_list,
+                         pAdjustMethod = "BH",
+                         qvalueCutoff = 0.05)
+data_framed_ora_upregulated <- as.data.frame(ora_hallmark_upregulated)
+
+ora_hallmark_downregulated <- enricher(gene = selected_genes_downregulated,
+                         TERM2GENE = hallmark_list,
+                         pAdjustMethod = "BH",
+                         qvalueCutoff = 0.05)
+data_framed_ora_downregulated <- as.data.frame(ora_hallmark_downregulated)
+
+if (nrow(data_framed_ora_upregulated) > 0){
+write_xlsx(data_framed_ora_upregulated, paste("top_score/fibrosis_overview_95_msigdb_upregulated_",i,".xlsx", sep=""))
+p <- barplot(ora_hallmark_upregulated,
+             drop = TRUE,
+             showCategory = 10,
+             title = paste("MSigDB = ",i, " (Fibrosis) - Upregulated", sep = ""),
+             font.size = 10)
+
+# Save as 600 DPI PNG
+ggsave(paste("top_score/fibrosis_ORA_MSigDB_upregulated_",i,".png", sep=""),
+       plot = p,
+       width = 8, height = 6, dpi = 600, units = "in")
+}
+
+if(nrow(data_framed_ora_downregulated) > 0){
+write_xlsx(data_framed_ora_downregulated, paste("top_score/fibrosis_overview_95_msigdb_downregulated_",i,".xlsx", sep=""))
+p <- barplot(ora_hallmark_downregulated,
+             drop = TRUE,
+             showCategory = 10,
+             title = paste("MSigDB = ",i, " (Fibrosis) - Downregulated", sep = ""),
+             font.size = 10)
+
+# Save as 600 DPI PNG
+ggsave(paste("top_score/fibrosis_ORA_MSigDB_downregulated_",i,".png", sep=""),
+       plot = p,
+       width = 8, height = 6, dpi = 600, units = "in")
+}
+}
+
+
+
+################################ ORA - Dorothea - Directed
+
+data(dorothea_hs)
+dorothea_regulon <- dorothea_hs %>% 
+  filter(confidence %in% c("A", "B", "C"))
+
+# Create TERM2GENE format
+term2gene <- dorothea_regulon %>% dplyr::select(tf, target)
+
+ora_tf <- enricher(gene = selected_genes_upregulated,
+                   TERM2GENE = term2gene,
+                   pAdjustMethod = "BH",
+                   qvalueCutoff = 0.05)
+
+head(as.data.frame(ora_tf))
+
+data_framed_ora <- as.data.frame(ora_tf)
+write_xlsx(data_framed_ora,"top_score/fibrosis_overview_95_ORA_DoRothEA_upregulated.xlsx")
+p <- barplot(ora_tf, showCategory = 17, title = "ORA - TF Enrichment (DoRothEA) - Fibrosis - Upregulated Genes")
+ggsave("top_score/fibrosis_ORA_DoRothEA_upregulated.png",
+       plot = p,
+       width = 8, height = 6, dpi = 600, units = "in")
+```
+

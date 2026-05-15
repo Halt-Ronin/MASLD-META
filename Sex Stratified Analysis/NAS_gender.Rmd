@@ -1,0 +1,503 @@
+---
+title: "NAS_gender"
+author: "Eren Kumak"
+date: "2025-06-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(data.table)
+library(org.Hs.eg.db)
+library(GEOquery)
+library(Rtsne)
+library(ggfortify)
+library(dplyr)
+library(gridExtra)
+library(sva)
+library(limma)
+library(DESeq2)
+library(edgeR)
+library(plotly)
+library(rmarkdown)
+library(vegan)
+library(tidyr)
+library(pheatmap)
+library(rococo)
+library(parallel)
+library(pbapply)
+library(kohonen)
+library(writexl)
+library(phenopath)
+library(metaRNASeq)
+set.seed(42)
+```
+
+
+
+```{r}
+load_dataset <- function(id){
+  a <- fread(paste(id, ".tsv", sep=""))
+  gene_names <- mapIds(
+    org.Hs.eg.db,
+    keys = as.character(a$GeneID),
+    column = "SYMBOL", 
+    keytype = "ENTREZID",
+    multiVals = "first"
+)
+  a$GeneID <- gene_names
+  colnames(a)[1] <- "Gene"
+  a <- a[!duplicated(a$Gene),]
+  a <- a[!is.na(a$Gene),]
+  a <- as.data.frame(a)
+  rownames(a) <- a$Gene
+  a$Gene <- NULL
+  return(a)
+}
+
+load_meta <- function(id){
+  a  <- getGEO(id, GSEMatrix = TRUE)
+  a  <- pData(a [[1]])
+  return(a)
+}
+
+individual_DESeq2_female <- function(data,meta,col_index_nas, col_index_sex,name){
+  meta <- meta[rownames(meta) %in% colnames(data),] #only get the samples where count data is availasble
+  meta <- meta[meta[,col_index_sex] %in% c("Female","F","female"),] 
+  colData <- as.data.frame(meta[,col_index_nas]) # create the design df
+  rownames(colData) <- rownames(meta) 
+  colnames(colData) <- "score" #name NAS as score
+  colData <- colData[!colData[, 1] == "NA", , drop = FALSE]
+    colData <- colData %>% mutate(
+      score = as.integer(score),
+      score = case_when(
+    score %in% c(0,1,2) ~ 0,
+    score %in% c(3) ~ 1,
+    score %in% c(4) ~ 2,
+    score %in% c(5) ~ 3,
+    score %in% c(6,7,8) ~ 4,
+    TRUE ~ score
+  ))
+  data <- data[,colnames(data) %in% rownames(colData)]
+  print(sum(rownames(colData) != colnames(data))) # check whether rownames of colData is same with colnames of data !should return 0
+  colData$score <- as.factor(colData$score) #factorize them
+  if (all(c("0", "4") %in% unique(as.character(colData$score)))) {
+  dds <- DESeqDataSetFromMatrix(countData = data, colData = colData, design = ~ score) #classic DESeq2s
+  dds <- DESeq(dds) 
+  group_sizes <- table(colData$score)
+  smallest_group_size <- min(group_sizes)
+  keep <- rowSums(counts(dds) >= 10) >= smallest_group_size
+  dds <- dds[keep,]
+  comb <- data.frame(A = c(0), B = c(4))
+  print(comb)
+  for (i in 1:nrow(comb)){
+    res <- data.frame(DESeq2::results(dds, contrast = c("score",comb$B[i],comb$A[i]), cooksCutoff = FALSE))
+      # Create folder path
+  folder_path <- paste(name, "/gender/", sep = "")
+  
+  # Ensure directory exists
+  if (!dir.exists(folder_path)) {
+    dir.create(folder_path, recursive = TRUE)
+  }
+  
+  # Construct filename and full path
+  file_name <- paste("female_NAS_DESEQ2_", as.character(comb$B[i]), "_VS_", as.character(comb$A[i]), ".csv", sep = "")
+  full_path <- paste(folder_path, file_name, sep = "")
+  write.csv(res, full_path)
+  }
+  }else{
+    print(name)
+  }
+}
+  
+individual_DESeq2_male <- function(data,meta,col_index_nas, col_index_sex,name){
+  meta <- meta[rownames(meta) %in% colnames(data),] #only get the samples where count data is availasble
+  meta <- meta[meta[,col_index_sex] %in% c("Male","M","male"),] 
+  colData <- as.data.frame(meta[,col_index_nas]) # create the design df
+  rownames(colData) <- rownames(meta) 
+  colnames(colData) <- "score" #name NAS as score
+  colData <- colData[!colData[, 1] == "NA", , drop = FALSE]
+    colData <- colData %>% mutate(
+      score = as.integer(score),
+      score = case_when(
+    score %in% c(0,1,2) ~ 0,
+    score %in% c(3) ~ 1,
+    score %in% c(4) ~ 2,
+    score %in% c(5) ~ 3,
+    score %in% c(6,7,8) ~ 4,
+    TRUE ~ score
+  ))
+  data <- data[,colnames(data) %in% rownames(colData)]
+  print(sum(rownames(colData) != colnames(data))) # check whether rownames of colData is same with colnames of data !should return 0
+  colData$score <- as.factor(colData$score) #factorize them
+  if (all(c("0", "4") %in% unique(as.character(colData$score)))) {
+  dds <- DESeqDataSetFromMatrix(countData = data, colData = colData, design = ~ score) #classic DESeq2s
+  dds <- DESeq(dds) 
+  group_sizes <- table(colData$score)
+  smallest_group_size <- min(group_sizes)
+  keep <- rowSums(counts(dds) >= 10) >= smallest_group_size
+  dds <- dds[keep,]
+  comb <- data.frame(A = c(0), B = c(4))
+  print(comb)
+  for (i in 1:nrow(comb)){
+    res <- data.frame(DESeq2::results(dds, contrast = c("score",comb$B[i],comb$A[i]), cooksCutoff = FALSE))
+      # Create folder path
+  folder_path <- paste(name, "/gender/", sep = "")
+  
+  # Ensure directory exists
+  if (!dir.exists(folder_path)) {
+    dir.create(folder_path, recursive = TRUE)
+  }
+  
+  # Construct filename and full path
+  file_name <- paste("male_NAS_DESEQ2_", as.character(comb$B[i]), "_VS_", as.character(comb$A[i]), ".csv", sep = "")
+  full_path <- paste(folder_path, file_name, sep = "")
+  write.csv(res, full_path)
+  }
+  }else{
+    print(name)
+  }
+}
+```
+
+```{r}
+GSE <- c("GSE193066","GSE130970","GSE192959","GSE207310","GSE162694","GSE174478","GSE185051")
+index_nas <- c(46,47,42,47,45,43,46)
+index_sex <- c(42,42,39,45,42,39,45)
+
+#Female set problem in --> GSE192959
+#Male set problem in --> GSE207310
+
+for (i in 1:length(GSE)){
+  data <- load_dataset(GSE[i])
+  meta <- load_meta(GSE[i])
+  individual_DESeq2_female(data,meta,index_nas[i], index_sex[i],GSE[i])
+}
+
+for (i in 1:length(GSE)){
+  data <- load_dataset(GSE[i])
+  meta <- load_meta(GSE[i])
+  individual_DESeq2_male(data,meta,index_nas[i], index_sex[i],GSE[i])
+}
+```
+
+```{r female}
+GSE_female <- c("GSE130970","GSE207310","GSE162694","GSE174478","GSE185051")
+#GSE193066 droped due to p val distrubtion
+index_female <- c(47,47,45,43,46)
+index_female_sex <- c(42,45,42,39,45)
+studies <- list()
+comb <- as.data.frame(t(combn(0:4, 2)))
+colnames(comb) <- c("A", "B")
+print(comb)
+
+c <- 4
+
+# Loop through each element in GSE
+for (i in 1:length(GSE_female)) {
+  # Construct the file path and read the CSV file
+  file_path <- paste(GSE_female[i], "/gender/female_NAS_DESEQ2_",as.character(comb$B[c]),"_VS_",as.character(comb$A[c]),".csv", sep = "")
+  studies[[i]] <- read.csv(file_path)
+}
+  common_rows <- Reduce(intersect, lapply(studies, function(df) df$X))
+  # Filter each dataset to contain only common rows & sort them
+  datasets_filtered <- lapply(studies, function(df) {
+    df <- df[df$X %in% common_rows, ]  # Keep only common rows
+    df <- df[order(df$X), ]  # Sort by column 'X'
+    return(df)
+  })
+  
+  
+ # Create lists to store p-values, fold changes, and adjusted p-values
+rawpval <- lapply(1:length(datasets_filtered), function(i) datasets_filtered[[i]][["pvalue"]])
+FC <- lapply(1:length(datasets_filtered), function(i) datasets_filtered[[i]][["log2FoldChange"]])
+adjpval <- lapply(1:length(datasets_filtered), function(i) datasets_filtered[[i]][["padj"]])
+
+# List of study names
+studies <- GSE_female
+
+# Set up the layout for 2 rows and 5 columns
+par(mfrow = c(2, 5), mar = c(4, 4, 2, 1), oma = c(4, 4, 4, 4))
+
+# Loop through all datasets
+for (i in 1:length(datasets_filtered)) {
+  # Plot histogram with transparency to avoid overlap
+  hist(rawpval[[i]], breaks=100, col=rgb(0.5, 0.5, 0.5, 0.5), 
+       main=paste(studies[i]), 
+       xlab="Raw p-values", 
+       cex.main=0.8,   # Reduce title size
+       cex.lab=0.7,    # Reduce axis label size
+       las=1)          # Ensure horizontal axis labels
+}
+
+mtext(paste("Raw p-values",as.character(comb$B[c]),"VS",as.character(comb$A[c]),sep=" "), side = 3, outer = TRUE, line = 1, cex = 1.5, font = 2)
+
+# Apply DE calculation for each dataset
+DE <- mapply(function(x) ifelse(x <= 0.05, 1, 0), adjpval)
+
+# Set column names for DE
+colnames(DE) <- paste("DE", studies, sep=".")
+
+rep <- list()
+for (i in 1:length(studies)){
+  data <- load_dataset(studies[i])
+  meta <- load_meta(studies[i])
+  col_index <- index_female[i]
+  meta <- meta[rownames(meta) %in% colnames(data),] #only get the samples where count data is availasble
+  meta <- meta[meta[,index_female_sex[i]] %in% c("Female","F","female"),] 
+  colData <- as.data.frame(meta[,col_index]) # create the design df
+  rownames(colData) <- rownames(meta) 
+  colnames(colData) <- "score" #name NAS as score
+  colData <- colData[!colData[, 1] == "NA", , drop = FALSE]
+    colData <- colData %>% mutate(
+      score = as.integer(score),
+      score = case_when(
+    score %in% c(0,1,2) ~ 0,
+    score %in% c(3) ~ 1,
+    score %in% c(4) ~ 2,
+    score %in% c(5) ~ 3,
+    score %in% c(6,7,8) ~ 4,
+    TRUE ~ score
+  ))
+  data <- data[,colnames(data) %in% rownames(colData)]
+  print(sum(rownames(colData) != colnames(data))) # check whether rownames of colData is same with colnames of data !should return 0
+  colData$score <- as.factor(colData$score) #factorize them
+  sum(colData$score %in% c(comb$A[c],comb$B[c]))
+  rep <- append(rep,sum(colData$score %in% c(comb$A[c],comb$B[c])))
+}
+
+invnormcomb <- invnorm(rawpval,nrep= as.vector(unlist(rep)), BHth = 0.05)
+  
+hist(invnormcomb$rawpval, breaks=100, col="grey",main="Inverse normal method",xlab = "Raw p-values (meta-analysis)")
+ 
+fishcomb <- fishercomb(rawpval, BHth = 0.05)
+
+hist(fishcomb$rawpval, breaks=100, col="grey", main="Fisher method",xlab = "Raw p-values (meta-analysis)")
+
+ 
+DEresults <- data.frame(DE,"DE.fishercomb"=ifelse(fishcomb$adjpval<=0.05,1,0),"DE.invnorm"=ifelse(invnormcomb$adjpval<=0.05,1,0))
+
+
+# Extract signs of fold changes
+signsFC <- mapply(FC, FUN=function(x) sign(x))
+
+# Sum signs across studies to identify consistent/contradictory genes
+sumsigns <- apply(signsFC, 1, sum)
+commonsgnFC <- ifelse(abs(sumsigns) == dim(signsFC)[2], sign(sumsigns), 0)
+
+# Identify differentially expressed genes from meta-analysis
+unionDE <- unique(c(fishcomb$DEindices, invnormcomb$DEindices))
+
+# Create a table combining DE results, fold changes, and sign consistency
+FC.selecDE <- data.frame(DEresults[unionDE, ], 
+                         do.call(cbind, FC)[unionDE, ], 
+                         signFC=commonsgnFC[unionDE])
+
+# Filter out conflicting genes
+keepDE <- FC.selecDE[which(abs(FC.selecDE$signFC) == 1), ]
+conflictDE <- FC.selecDE[which(FC.selecDE$signFC == 0), ]
+
+# Check the number of conflicting genes
+cat("Total DE genes before filtering:", nrow(FC.selecDE), "\n")
+cat("DE genes after removing conflicts:", nrow(keepDE), "\n")
+cat("Conflicting genes removed:", nrow(conflictDE), "\n")
+
+# Save the cleaned results
+dim(keepDE)
+dim(conflictDE)
+
+ordered_gene_names <- common_rows[order(common_rows)]
+existing_genes_keep <- ordered_gene_names[as.numeric(rownames(keepDE))]
+rownames(keepDE) <- existing_genes_keep
+
+
+# # Compute IDD and IRR for multiple studies
+# fishcomb_de <- rownames(keepDE)[which(keepDE[,"DE.fishercomb"] == 1)]
+# invnorm_de <- rownames(keepDE)[which(keepDE[,"DE.invnorm"] == 1)]
+
+# # Dynamically collect DE gene names from all studies
+# study_cols <- grep("DE.", colnames(keepDE), value = TRUE)
+# indstudy_de <- lapply(study_cols, function(study) rownames(keepDE)[which(keepDE[[study]] == 1)])
+# 
+# # Calculate IDD and IRR
+# cat("IDD and IRR for Fisher's method:\n")
+# print(IDD.IRR(fishcomb_de, indstudy_de))
+# 
+# cat("IDD and IRR for Inverse Normal method:\n")
+# print(IDD.IRR(invnorm_de, indstudy_de))
+
+# upset_data <- as.data.frame(sapply(study_cols, function(study) as.integer(rownames(keepDE) %in% rownames(keepDE)[which(keepDE[[study]] == 1)])))
+# colnames(upset_data) <- study_cols
+# library(UpSetR)
+# upset(upset_data, sets = study_cols, keep.order = TRUE, order.by = "freq")
+
+keepDE$average_logFC <- rowMeans(keepDE[,(length(studies)+3):(2*length(studies)+2)])
+
+colnames(keepDE)[(length(studies)+3):(2*length(studies)+2)] <- paste0(studies, "-FC")
+keepDE$Gene <- rownames(keepDE)
+df <- keepDE[, c(ncol(keepDE), 1:(ncol(keepDE) - 1))]
+write_xlsx(df, paste("female_Individual_Analysis_",as.character(comb$B[c]),"_VS_",as.character(comb$A[c]),".xlsx", sep = ""))
+```
+
+```{r}
+GSE_male <- c("GSE193066","GSE174478")
+# others are filtered due to p val distrubiton
+index_male <- c(46,43)
+index_male_sex <- c(42,39)
+
+studies <- list()
+comb <- as.data.frame(t(combn(0:4, 2)))
+colnames(comb) <- c("A", "B")
+print(comb)
+
+c <- 4
+
+# Loop through each element in GSE
+for (i in 1:length(GSE_male)) {
+  # Construct the file path and read the CSV file
+  file_path <- paste(GSE_male[i], "/gender/male_NAS_DESEQ2_",as.character(comb$B[c]),"_VS_",as.character(comb$A[c]),".csv", sep = "")
+  studies[[i]] <- read.csv(file_path)
+}
+  common_rows <- Reduce(intersect, lapply(studies, function(df) df$X))
+  # Filter each dataset to contain only common rows & sort them
+  datasets_filtered <- lapply(studies, function(df) {
+    df <- df[df$X %in% common_rows, ]  # Keep only common rows
+    df <- df[order(df$X), ]  # Sort by column 'X'
+    return(df)
+  })
+  
+  
+ # Create lists to store p-values, fold changes, and adjusted p-values
+rawpval <- lapply(1:length(datasets_filtered), function(i) datasets_filtered[[i]][["pvalue"]])
+FC <- lapply(1:length(datasets_filtered), function(i) datasets_filtered[[i]][["log2FoldChange"]])
+adjpval <- lapply(1:length(datasets_filtered), function(i) datasets_filtered[[i]][["padj"]])
+
+# List of study names
+studies <- GSE_male
+
+# Set up the layout for 2 rows and 5 columns
+par(mfrow = c(2, 5), mar = c(4, 4, 2, 1), oma = c(4, 4, 4, 4))
+
+# Loop through all datasets
+for (i in 1:length(datasets_filtered)) {
+  # Plot histogram with transparency to avoid overlap
+  hist(rawpval[[i]], breaks=100, col=rgb(0.5, 0.5, 0.5, 0.5), 
+       main=paste(studies[i]), 
+       xlab="Raw p-values", 
+       cex.main=0.8,   # Reduce title size
+       cex.lab=0.7,    # Reduce axis label size
+       las=1)          # Ensure horizontal axis labels
+}
+
+mtext(paste("Raw p-values",as.character(comb$B[c]),"VS",as.character(comb$A[c]),sep=" "), side = 3, outer = TRUE, line = 1, cex = 1.5, font = 2)
+
+# Apply DE calculation for each dataset
+DE <- mapply(function(x) ifelse(x <= 0.05, 1, 0), adjpval)
+
+# Set column names for DE
+colnames(DE) <- paste("DE", studies, sep=".")
+
+rep <- list()
+for (i in 1:length(studies)){
+  data <- load_dataset(studies[i])
+  meta <- load_meta(studies[i])
+  col_index <- index_male[i]
+  meta <- meta[rownames(meta) %in% colnames(data),] #only get the samples where count data is availasble
+  meta <- meta[meta[,index_male_sex[i]] %in% c("Male","F","male"),] 
+  colData <- as.data.frame(meta[,col_index]) # create the design df
+  rownames(colData) <- rownames(meta) 
+  colnames(colData) <- "score" #name NAS as score
+  colData <- colData[!colData[, 1] == "NA", , drop = FALSE]
+    colData <- colData %>% mutate(
+      score = as.integer(score),
+      score = case_when(
+    score %in% c(0,1,2) ~ 0,
+    score %in% c(3) ~ 1,
+    score %in% c(4) ~ 2,
+    score %in% c(5) ~ 3,
+    score %in% c(6,7,8) ~ 4,
+    TRUE ~ score
+  ))
+  data <- data[,colnames(data) %in% rownames(colData)]
+  print(sum(rownames(colData) != colnames(data))) # check whether rownames of colData is same with colnames of data !should return 0
+  colData$score <- as.factor(colData$score) #factorize them
+  sum(colData$score %in% c(comb$A[c],comb$B[c]))
+  rep <- append(rep,sum(colData$score %in% c(comb$A[c],comb$B[c])))
+}
+
+invnormcomb <- invnorm(rawpval,nrep= as.vector(unlist(rep)), BHth = 0.05)
+  
+hist(invnormcomb$rawpval, breaks=100, col="grey",main="Inverse normal method",xlab = "Raw p-values (meta-analysis)")
+ 
+fishcomb <- fishercomb(rawpval, BHth = 0.05)
+
+hist(fishcomb$rawpval, breaks=100, col="grey", main="Fisher method",xlab = "Raw p-values (meta-analysis)")
+
+ 
+DEresults <- data.frame(DE,"DE.fishercomb"=ifelse(fishcomb$adjpval<=0.05,1,0),"DE.invnorm"=ifelse(invnormcomb$adjpval<=0.05,1,0))
+
+
+# Extract signs of fold changes
+signsFC <- mapply(FC, FUN=function(x) sign(x))
+
+# Sum signs across studies to identify consistent/contradictory genes
+sumsigns <- apply(signsFC, 1, sum)
+commonsgnFC <- ifelse(abs(sumsigns) == dim(signsFC)[2], sign(sumsigns), 0)
+
+# Identify differentially expressed genes from meta-analysis
+unionDE <- unique(c(fishcomb$DEindices, invnormcomb$DEindices))
+
+# Create a table combining DE results, fold changes, and sign consistency
+FC.selecDE <- data.frame(DEresults[unionDE, ], 
+                         do.call(cbind, FC)[unionDE, ], 
+                         signFC=commonsgnFC[unionDE])
+
+# Filter out conflicting genes
+keepDE <- FC.selecDE[which(abs(FC.selecDE$signFC) == 1), ]
+conflictDE <- FC.selecDE[which(FC.selecDE$signFC == 0), ]
+
+# Check the number of conflicting genes
+cat("Total DE genes before filtering:", nrow(FC.selecDE), "\n")
+cat("DE genes after removing conflicts:", nrow(keepDE), "\n")
+cat("Conflicting genes removed:", nrow(conflictDE), "\n")
+
+# Save the cleaned results
+dim(keepDE)
+dim(conflictDE)
+
+ordered_gene_names <- common_rows[order(common_rows)]
+existing_genes_keep <- ordered_gene_names[as.numeric(rownames(keepDE))]
+rownames(keepDE) <- existing_genes_keep
+
+
+# # Compute IDD and IRR for multiple studies
+# fishcomb_de <- rownames(keepDE)[which(keepDE[,"DE.fishercomb"] == 1)]
+# invnorm_de <- rownames(keepDE)[which(keepDE[,"DE.invnorm"] == 1)]
+
+# # Dynamically collect DE gene names from all studies
+# study_cols <- grep("DE.", colnames(keepDE), value = TRUE)
+# indstudy_de <- lapply(study_cols, function(study) rownames(keepDE)[which(keepDE[[study]] == 1)])
+# 
+# # Calculate IDD and IRR
+# cat("IDD and IRR for Fisher's method:\n")
+# print(IDD.IRR(fishcomb_de, indstudy_de))
+# 
+# cat("IDD and IRR for Inverse Normal method:\n")
+# print(IDD.IRR(invnorm_de, indstudy_de))
+
+# upset_data <- as.data.frame(sapply(study_cols, function(study) as.integer(rownames(keepDE) %in% rownames(keepDE)[which(keepDE[[study]] == 1)])))
+# colnames(upset_data) <- study_cols
+# library(UpSetR)
+# upset(upset_data, sets = study_cols, keep.order = TRUE, order.by = "freq")
+
+keepDE$average_logFC <- rowMeans(keepDE[,(length(studies)+3):(2*length(studies)+2)])
+
+colnames(keepDE)[(length(studies)+3):(2*length(studies)+2)] <- paste0(studies, "-FC")
+keepDE$Gene <- rownames(keepDE)
+df <- keepDE[, c(ncol(keepDE), 1:(ncol(keepDE) - 1))]
+write_xlsx(df, paste("male_Individual_Analysis_",as.character(comb$B[c]),"_VS_",as.character(comb$A[c]),".xlsx", sep = ""))
+```
+

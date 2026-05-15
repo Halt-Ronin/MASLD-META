@@ -1,0 +1,289 @@
+---
+title: "Individual Analysis"
+author: "Eren Kumak"
+date: "2025-02-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+http://varianceexplained.org/statistics/interpreting-pvalue-histogram/
+https://cran.r-project.org/web/packages/metaRNASeq/vignettes/metaRNASeq.pdf
+
+```{r setup, include=FALSE}
+library(data.table)
+library(org.Hs.eg.db)
+library(GEOquery)
+library(Rtsne)
+library(ggfortify)
+library(dplyr)
+library(gridExtra)
+library(sva)
+library(limma)
+library(DESeq2)
+library(edgeR)
+library(plotly)
+library(rmarkdown)
+library(vegan)
+library(tidyr)
+library(pheatmap)
+library(rococo)
+library(parallel)
+library(pbapply)
+library(kohonen)
+library(writexl)
+library(phenopath)
+library(metaRNASeq)
+library(transport)
+set.seed(42)
+```
+
+```{r functions}
+load_dataset <- function(id){
+  a <- fread(paste(id, ".tsv", sep="")) #load the count optained from NCBI-generated RNA-seq
+  gene_names <- mapIds(
+    org.Hs.eg.db,
+    keys = as.character(a$GeneID),
+    column = "SYMBOL", 
+    keytype = "ENTREZID",
+    multiVals = "first"
+) # Get the gene symbols from ENTREZIDs
+  a$GeneID <- gene_names #assign gene names instead of ENTREZID
+  colnames(a)[1] <- "Gene" #change the column name
+  a <- a[!duplicated(a$Gene),] #remove duplicated gene names
+  a <- a[!is.na(a$Gene),] #remove any NAs in gene name
+  a <- as.data.frame(a) #turn to df
+  rownames(a) <- a$Gene #assign gene names as row names.
+  a$Gene <- NULL #remove column
+  return(a) #return fully modified df
+}
+
+load_meta <- function(id){
+  a  <- getGEO(id, GSEMatrix = TRUE) #get the meta data via accession.
+  a  <- pData(a[[1]]) #get the df portion
+  return(a) #return it
+}
+
+individual_DESeq2 <- function(data,meta,col_index,name){
+  meta <- meta[rownames(meta) %in% colnames(data),] #only get the samples where count data is availasble
+  colData <- as.data.frame(meta[,col_index]) # create the design df
+  rownames(colData) <- rownames(meta) 
+  print(sum(rownames(colData) != colnames(data))) # check whether rownames of colData is same with colnames of data !should return 0
+  colnames(colData) <- "score" #name NAS as score
+  colData <- colData[!colData[, 1] == "NA", , drop = FALSE]
+    colData <- colData %>% mutate(
+      score = as.integer(score),
+      score = case_when(
+    score %in% c(0,1,2) ~ 0,
+    score %in% c(3) ~ 1,
+    score %in% c(4) ~ 2,
+    score %in% c(5) ~ 3,
+    score %in% c(6,7,8) ~ 4,
+    TRUE ~ score
+  ))
+  data <- data[,colnames(data) %in% rownames(colData)]
+  colData$score <- as.factor(colData$score) #factorize them
+  dds <- DESeqDataSetFromMatrix(countData = data, colData = colData, design = ~ score) #classic DESeq2s
+  dds <- DESeq(dds) 
+  group_sizes <- table(colData$score) #Counts how many samples are in each score group.
+  smallest_group_size <- min(group_sizes) #Stores the size of the smallest group 
+  keep <- rowSums(counts(dds) >= 10) >= smallest_group_size #Keeps genes that are expressed (≥10 reads) in at least as many samples as the smallest group size. Example: If smallest group has 3 samples, this line keeps genes that are expressed in ≥3 samples.
+  dds <- dds[keep,] #Applies that filter to the dataset.
+  comb <- as.data.frame(t(combn(0:4, 2))) #get combination of 4 so that we can make combinatorial comparison
+  colnames(comb) <- c("A", "B") #name A B
+  for (i in 1:nrow(comb)){
+    res <- data.frame(DESeq2::results(dds, contrast = c("score",comb$B[i],comb$A[i]), cooksCutoff = FALSE))
+    write.csv(res,paste(name,"/","NAS_DESEQ2_",as.character(comb$B[i]),"_VS_",as.character(comb$A[i]),".csv",sep=""))
+  } #run comparison for each comb where smaller one is control.
+  }
+```
+
+```{r}
+GSE <- c("GSE135251","GSE193066","GSE225740","GSE130970","GSE192959","GSE207310","GSE162694","GSE174478","GSE185051") #vector of datasets
+index <- c(45,46,38,47,42,47,45,43,46) #vector of NAS indexes
+
+for (i in 1:length(GSE)){
+  data <- load_dataset(GSE[i])
+  meta <- load_meta(GSE[i])
+  individual_DESeq2(data,meta,index[i],GSE[i])
+}
+```
+
+```{r}
+#this part is for getting a base p-val distribution appropriate for metarnaseq and the remaining code is from their own tutorial check the second link at the begining of this document
+
+studies <- list() #empty list
+comb <- as.data.frame(t(combn(0:4, 2))) #comb of 4 2
+colnames(comb) <- c("A", "B") #column rename
+print(comb) #check by print
+
+c <- 4 #get the 4th one which is the most extreme and contain better distributions due to that
+
+# Loop through each element in GSE
+for (i in 1:length(GSE)) {
+  file_path <- paste(GSE[i], "/NAS_DESEQ2_",as.character(comb$B[c]),"_VS_",as.character(comb$A[c]),".csv", sep = "")   # Construct the file path and read the CSV file
+  studies[[i]] <- read.csv(file_path) #get the study in the list
+}
+  common_rows <- Reduce(intersect, lapply(studies, function(df) df$X)) #get common genes across each study
+  datasets_filtered <- lapply(studies, function(df) {
+    df <- df[df$X %in% common_rows, ]  # Keep only common rows
+    df <- df[order(df$X), ]  # Sort by column 'X'
+    return(df)
+  })
+  
+  
+ # Create lists to store p-values, fold changes, and adjusted p-values
+rawpval <- lapply(1:length(datasets_filtered), function(i) datasets_filtered[[i]][["pvalue"]]) #loop through datasets_filtered extracts the pvalue column from each dataset and stores them in a list called rawpval.
+
+checked_for_p <- rawpval[[1]] #Picks the p-values of the first dataset for plotting.
+studies <- GSE #Stores the study names (or dataset IDs) in a new variable studies.
+hist(checked_for_p, breaks=100, col=rgb(0.5, 0.5, 0.5, 0.5), 
+       main=paste(studies[i]), 
+       xlab="Raw p-values", 
+       cex.main=0.8,   # Reduce title size
+       cex.lab=0.7,    # Reduce axis label size
+       las=1)          # Ensure horizontal axis labels
+
+#########################
+
+studies <- list()  #empty list
+comb <- as.data.frame(t(combn(0:4, 2))) #comb of 4 2
+colnames(comb) <- c("A", "B") #column rename
+print(comb) #check by print
+
+c <- 10 #there is a possibility to create a big for loop but I ran everything by just changing this
+
+# Loop through each element in GSE
+for (i in 1:length(GSE)) {
+  file_path <- paste(GSE[i], "/NAS_DESEQ2_",as.character(comb$B[c]),"_VS_",as.character(comb$A[c]),".csv", sep = "") # Construct the file path and read the CSV file
+  studies[[i]] <- read.csv(file_path)  #get the study into list
+}
+  common_rows <- Reduce(intersect, lapply(studies, function(df) df$X)) #get common genes across each study
+  # Filter each dataset to contain only common rows & sort them
+  datasets_filtered <- lapply(studies, function(df) {
+    df <- df[df$X %in% common_rows, ]  # Keep only common rows
+    df <- df[order(df$X), ]  # Sort by column 'X'
+    return(df)
+  })
+  
+  
+ # Create lists to store p-values, fold changes, and adjusted p-values
+rawpval <- lapply(1:length(datasets_filtered), function(i) datasets_filtered[[i]][["pvalue"]])
+FC <- lapply(1:length(datasets_filtered), function(i) datasets_filtered[[i]][["log2FoldChange"]])
+adjpval <- lapply(1:length(datasets_filtered), function(i) datasets_filtered[[i]][["padj"]])
+
+
+studies <- GSE # List of study names
+datasets_filtered_by_distance <- list() #empty list
+studies_filtered_by_distance <- c() #empty vector
+index_filtered_by_distance <- c() #empty vector
+for (i in 1:length(datasets_filtered)){
+  if (wasserstein1d(rawpval[[i]], checked_for_p) <= 0.12){
+    studies_filtered_by_distance <- c(studies_filtered_by_distance, studies[i])
+    datasets_filtered_by_distance[[i]] <- datasets_filtered[[i]]
+    index_filtered_by_distance <- c(index_filtered_by_distance, index[i])
+  }
+} #this loops through p_val distribution of each study and calculated wasserstein1d distance with checked_for_p which is best fitting histogram for metarnaseq in 4 vs 0 comparison. Keeps the dataset if distance is lower or equal than 0.12. This value is selected because I calculated Wasserstein distance for the other p value distributions “4 vs 0” comparison and compared with ideal one then adjuste the treshold according to distances of these distributions to ideal one. Methods like Kolmogorov Smirnov (KS) was extremely sensitive which eliminates when there is a neglectable shift in distribution (e.g different peak lengths). I also have distributions for other methods like edgeR and Limma instead of DESeq2 which also requires this approach. I did not wanted to eliminate these by visual inspection because it is prone to be biased.  
+
+datasets_filtered_by_distance <- Filter(Negate(is.null), datasets_filtered_by_distance) #It removes NULL entries from the list datasets_filtered_by_distance.
+
+######### Parts below this are directly from metarnaseq tutorial (see second link at the begining of this file)
+
+
+#get the raw p-val logFC, and adj p val for filtered datasets
+rawpval_distance <- lapply(1:length(datasets_filtered_by_distance), function(i) datasets_filtered_by_distance[[i]][["pvalue"]])
+FC_distance <- lapply(1:length(datasets_filtered_by_distance), function(i) datasets_filtered_by_distance[[i]][["log2FoldChange"]])
+adjpval_distance <- lapply(1:length(datasets_filtered_by_distance), function(i) datasets_filtered_by_distance[[i]][["padj"]])
+
+# Apply DE calculation for each dataset
+DE <- mapply(function(x) ifelse(x <= 0.05, 1, 0), adjpval_distance) #Converting adjusted p-values into DE yes/no (binary)
+
+# Set column names for DE
+colnames(DE) <- paste("DE", studies_filtered_by_distance, sep=".") #label the columns with study names
+
+rep <- list() #Initializes an empty list to store sample counts (one per dataset).
+for (i in 1:length(studies_filtered_by_distance)){
+  data <- load_dataset(studies_filtered_by_distance[i])
+  meta <- load_meta(studies_filtered_by_distance[i])
+  col_index <- index_filtered_by_distance[i]
+  meta <- meta[rownames(meta) %in% colnames(data),] #only get the samples where count data is availasble
+  colData <- as.data.frame(meta[,col_index]) # create the design df
+  rownames(colData) <- rownames(meta) 
+  print(sum(rownames(colData) != colnames(data))) # check whether rownames of colData is same with colnames of data !should return 0
+  colnames(colData) <- "score" #name NAS as score
+  colData <- colData[!colData[, 1] == "NA", , drop = FALSE] #drop NA
+    colData <- colData %>% mutate(
+      score = as.integer(score),
+      score = case_when(
+    score %in% c(0,1,2) ~ 0,
+    score %in% c(3) ~ 1,
+    score %in% c(4) ~ 2,
+    score %in% c(5) ~ 3,
+    score %in% c(6,7,8) ~ 4,
+    TRUE ~ score
+  )) #clustering the scores according to our own clustering
+  data <- data[,colnames(data) %in% rownames(colData)]
+  colData$score <- as.factor(colData$score) #factorize them
+  sum(colData$score %in% c(comb$A[c],comb$B[c])) #Counts how many samples in this dataset are from the two target groups
+  rep <- append(rep,sum(colData$score %in% c(comb$A[c],comb$B[c]))) #Appends the result to the rep list.
+}
+
+invnormcomb <- invnorm(rawpval_distance,nrep= as.vector(unlist(rep)), BHth = 0.05) 
+  
+hist(invnormcomb$rawpval, breaks=100, col="grey",main="Inverse normal method",xlab = "Raw p-values (meta-analysis)")
+ 
+fishcomb <- fishercomb(rawpval_distance, BHth = 0.05)
+
+hist(fishcomb$rawpval, breaks=100, col="grey", main="Fisher method",xlab = "Raw p-values (meta-analysis)")
+
+ 
+DEresults <- data.frame(DE,"DE.fishercomb"=ifelse(fishcomb$adjpval<=0.05,1,0),"DE.invnorm"=ifelse(invnormcomb$adjpval<=0.05,1,0))
+
+
+# Extract signs of fold changes
+signsFC <- mapply(FC_distance, FUN=function(x) sign(x))
+
+# Sum signs across studies to identify consistent/contradictory genes
+sumsigns <- apply(signsFC, 1, sum)
+commonsgnFC <- ifelse(abs(sumsigns) == dim(signsFC)[2], sign(sumsigns), 0)
+
+# Identify differentially expressed genes from meta-analysis
+unionDE <- unique(c(fishcomb$DEindices, invnormcomb$DEindices))
+
+# Create a table combining DE results, fold changes, and sign consistency
+FC.selecDE <- data.frame(DEresults[unionDE, ], 
+                         do.call(cbind, FC_distance)[unionDE, ], 
+                         signFC=commonsgnFC[unionDE])
+
+# Filter out conflicting genes (conflict of direction!)
+keepDE <- FC.selecDE[which(abs(FC.selecDE$signFC) == 1), ]
+conflictDE <- FC.selecDE[which(FC.selecDE$signFC == 0), ]
+
+# Check the number of conflicting genes
+cat("Total DE genes before filtering:", nrow(FC.selecDE), "\n")
+cat("DE genes after removing conflicts:", nrow(keepDE), "\n")
+cat("Conflicting genes removed:", nrow(conflictDE), "\n")
+
+# Save the cleaned results
+dim(keepDE)
+dim(conflictDE)
+
+ordered_gene_names <- common_rows[order(common_rows)]
+existing_genes_keep <- ordered_gene_names[as.numeric(rownames(keepDE))]
+rownames(keepDE) <- existing_genes_keep
+
+keepDE$average_logFC <- rowMeans(keepDE[,(length(studies_filtered_by_distance)+3):(2*length(studies_filtered_by_distance)+2)]) #calculate average logFC besides logFC for each study
+
+colnames(keepDE)[(length(studies_filtered_by_distance)+3):(2*length(studies_filtered_by_distance)+2)] <- paste0(studies_filtered_by_distance, "-FC") #rename logFC columns with their study names
+keepDE$Gene <- rownames(keepDE) #Moves the row names (gene IDs) into a proper Gene column.
+df <- keepDE[, c(ncol(keepDE), 1:(ncol(keepDE) - 1))] #Reorders columns so the new Gene column comes first in the dataframe.
+write_xlsx(df, paste("Individual_Analysis_",as.character(comb$B[c]),"_VS_",as.character(comb$A[c]),".xlsx", sep = "")) #save
+```
+
+
+
+
+
+

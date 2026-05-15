@@ -1,0 +1,143 @@
+---
+title: "Global Analysis"
+author: "Eren Kumak"
+date: "2025-02-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(data.table)
+library(org.Hs.eg.db)
+library(GEOquery)
+library(Rtsne)
+library(ggfortify)
+library(dplyr)
+library(gridExtra)
+library(sva)
+library(limma)
+library(DESeq2)
+library(edgeR)
+library(plotly)
+library(rmarkdown)
+library(vegan)
+library(tidyr)
+library(pheatmap)
+library(rococo)
+library(parallel)
+library(pbapply)
+library(kohonen)
+library(writexl)
+library(readxl)
+set.seed(42)
+```
+
+```{r}
+load_dataset <- function(id){
+  a <- fread(paste(id, ".tsv", sep=""))
+  gene_names <- mapIds(
+    org.Hs.eg.db,
+    keys = as.character(a$GeneID),
+    column = "SYMBOL", 
+    keytype = "ENTREZID",
+    multiVals = "first"
+)
+  a$GeneID <- gene_names
+  colnames(a)[1] <- "Gene"
+  a <- a[!duplicated(a$Gene),]
+  a <- a[!is.na(a$Gene),]
+  a <- as.data.frame(a)
+  rownames(a) <- a$Gene
+  a$Gene <- NULL
+  return(a)
+}
+
+load_meta <- function(id){
+  a  <- getGEO(id, GSEMatrix = TRUE)
+  a  <- pData(a [[1]])
+  return(a)
+}
+
+global <- function(data_list,meta_list,col_index_list,name_list){
+  for (i in 1:length(meta_list)) {
+    meta_list[[i]] <- as.data.frame(meta_list[[i]][rownames(meta_list[[i]]) %in% colnames(data_list[[i]]),])
+    names <- rownames(meta_list[[i]])
+    meta_list[[i]] <- as.data.frame(meta_list[[i]][,col_index_list[i]])
+    rownames(meta_list[[i]]) <- names
+    colnames(meta_list[[i]]) <- "fibrosis"
+    meta_list[[i]]$STUDY <- name_list[i]
+  }
+  
+  
+  common_rows <- Reduce(intersect, lapply(data_list, function(df) rownames(df)))
+  # Filter each dataset to contain only common rows & sort them
+  data_list <- lapply(data_list, function(df) {
+    df <- df[rownames(df) %in% common_rows, ]  # Keep only common rows
+    df <- df[order(rownames(df)), ]  # Sort by column 'X'
+    return(df)
+  })
+  
+  merged_data <- do.call(cbind, data_list)
+  merged_meta <- do.call(rbind, meta_list) 
+  print(sum(rownames(merged_meta) != colnames(merged_data)))
+    merged_meta <- merged_meta %>% mutate(
+      fibrosis = case_when(
+    fibrosis  %in% c(0,1,"0","1") ~ "F0_F1",
+      fibrosis %in% c(2,"2") ~ "F2",
+      fibrosis %in% c(3,"3") ~ "F3",
+      fibrosis %in% c(4,"4") ~ "F4",
+      TRUE ~ "NA"
+  ))
+  merged_meta <- merged_meta[!merged_meta[, 1] == "NA", , drop = FALSE]
+  merged_data <- merged_data[,colnames(merged_data) %in% rownames(merged_meta)]
+  merged_meta$fibrosis <- as.factor(merged_meta$fibrosis)
+  merged_meta$STUDY <- as.factor(merged_meta$STUDY)
+  adjusted_counts <- ComBat_seq(as.matrix(merged_data), batch=merged_meta$STUDY, group=merged_meta$fibrosis)
+  dds <- DESeqDataSetFromMatrix(countData = adjusted_counts, colData = merged_meta, design = ~ fibrosis) #classic DESeq2s
+  dds <- dds[rowSums(counts(dds) >= 10) >= 0.95 * ncol(dds), ]
+  dds <- DESeq(dds) 
+  vst_counts <- vst(dds, blind = FALSE)
+  vst_matrix <- assay(vst_counts)
+  pca_result <- prcomp(t(vst_matrix), scale = TRUE)
+   autoplot(pca_result, data = merged_meta, colour = 'STUDY') +
+    theme_minimal() +
+    ggtitle("2D PCA OF GLOBAL ANALYSIS COLORED BY STUDY")
+   comb <- as.data.frame(t(combn(c("F0_F1","F2","F3","F4"), 2)))
+  colnames(comb) <- c("A", "B")
+  for (i in 1:nrow(comb)){
+    res <- data.frame(DESeq2::results(dds, contrast = c("fibrosis",comb$B[i],comb$A[i]), cooksCutoff = FALSE))
+    write.csv(res,paste("GLOBAL","/","fibrosis_DESEQ2_GLOBAL_",as.character(comb$B[i]),"_VS_",as.character(comb$A[i]),".csv",sep=""))
+  }
+  permanova <- adonis2(t(vst_matrix) ~ fibrosis, data = merged_meta)
+  print(permanova)
+}
+```
+
+```{r}
+
+# GSE <- c("GSE174478", "GSE193066", "GSE130970", "GSE192959", "GSE162694", "GSE225740", "GSE135251")
+# index <- c(42,45,45,41,44,37,43)
+
+GSE <- c("GSE174478", "GSE193066", "GSE130970", "GSE192959", "GSE162694", "GSE225740", "GSE185051", "GSE135251")
+index <- c(42,45,45,41,44,37,44,43)
+
+studies_data <- list()
+studies_meta <- list()
+
+for (i in 1:length(GSE)){
+ data <- load_dataset(GSE[i])
+ meta <- load_meta(GSE[i])
+ studies_data[[i]] <- data
+ studies_meta[[i]] <- meta
+}
+data_list <- studies_data
+meta_list <- studies_meta
+col_index_list <- index
+name_list <- GSE
+global(studies_data,studies_meta,index,GSE)
+```
+
+

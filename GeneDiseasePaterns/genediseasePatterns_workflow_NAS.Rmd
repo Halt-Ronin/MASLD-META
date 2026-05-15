@@ -1,0 +1,333 @@
+---
+title: "NAS_genediseasePatterns_workflow"
+author: "Eren Kumak"
+date: "2025-02-06"
+output: 
+  html_document:
+   toc: true
+   toc_float: 
+     collapsed: false
+     smooth_scroll: true
+   number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+This document is created for MASLD application of genediseasePatterns method. The article and used workflow of their method can be found below.
+
+Article: https://bmcbioinformatics.biomedcentral.com/articles/10.1186/s12859-016-1290-4
+
+Standard Workflow: http://bioinfow.dep.usal.es/pages/genediseaspatterns/resources/genediseasePatterns_workflow.html 
+
+I will adjust the method for its reuse as a general function so that it can be applied to all NAS scored data we have.
+
+```{r setup, include=FALSE}
+library(data.table)
+library(org.Hs.eg.db)
+library(GEOquery)
+library(Rtsne)
+library(ggfortify)
+library(dplyr)
+library(gridExtra)
+library(sva)
+library(limma)
+library(DESeq2)
+library(edgeR)
+library(plotly)
+library(rmarkdown)
+library(vegan)
+library(tidyr)
+library(pheatmap)
+library(rococo)
+library(parallel)
+library(pbapply)
+library(kohonen)
+library(writexl)
+library(readxl)
+set.seed(42)
+```
+
+```{r functions}
+load_dataset <- function(id){
+  a <- fread(paste(id, ".tsv", sep=""))
+  gene_names <- mapIds(
+    org.Hs.eg.db,
+    keys = as.character(a$GeneID),
+    column = "SYMBOL", 
+    keytype = "ENTREZID",
+    multiVals = "first"
+)
+  a$GeneID <- gene_names
+  colnames(a)[1] <- "Gene"
+  a <- a[!duplicated(a$Gene),]
+  a <- a[!is.na(a$Gene),]
+  a <- as.data.frame(a)
+  rownames(a) <- a$Gene
+  a$Gene <- NULL
+  return(a)
+}
+
+load_meta <- function(id){
+  a  <- getGEO(id, GSEMatrix = TRUE)
+  a  <- pData(a [[1]])
+  return(a)
+}
+
+genediseasePatterns_GAMMA <- function(data,meta,col_index,name){
+  meta <- meta[rownames(meta) %in% colnames(data),] #only get the samples where count data is availasble
+  colData <- as.data.frame(meta[,col_index]) # create the design df
+  rownames(colData) <- rownames(meta) 
+  print(sum(rownames(colData) != colnames(data))) # check whether rownames of colData is same with colnames of data !should return 0
+  colnames(colData) <- "score" #name NAS as score
+  colData <- colData[!colData[, 1] == "NA", , drop = FALSE]
+    colData <- colData %>% mutate(
+      score = as.integer(score),
+      score = case_when(
+    score %in% c(0,1,2) ~ 210,
+    score %in% c(6,7,8) ~ 876,
+    TRUE ~ score
+  ))
+  data <- data[,colnames(data) %in% rownames(colData)]
+  stages <- factor(colData$score, levels = c(210, 3, 4, 5, 876))
+  #system.time(gammaResult <- apply(data, 1, function(geneExpr) rococo.test(as.numeric(stages), geneExpr)))
+  # Set up parallel processing
+  numCores <- detectCores() - 1  # Use one less than the number of cores
+  cl <- makeCluster(numCores)
+  
+  # Export necessary objects to the cluster
+  clusterExport(cl, c("data", "rococo.test"))
+  
+  # Parallelize the apply function
+  system.time({
+    gammaResult <- parApply(cl, data, 1, function(geneExpr) {
+      rococo.test(as.numeric(stages), geneExpr)
+    })
+  })
+  
+  # Stop the cluster after computation
+  stopCluster(cl)
+  save(gammaResult, file=paste(name,"_","result_GAMMA.RData",sep=""))
+}
+
+genediseasePatterns_SOM <- function(data, meta, col_index, name){
+  load(paste(name,"_","result_GAMMA.RData",sep=""))
+  gammaTable <- t(sapply(gammaResult, function(x) c(gamma=x@sample.gamma, p.value=x@p.value)))
+  gammaTable <- cbind(gammaTable, pAdj=p.adjust(p=gammaTable[,"p.value"], method = "fdr", n=nrow(gammaTable))) 
+  gammaTable <- gammaTable[order(abs(gammaTable[,"gamma"]), decreasing=T),] # Sort
+  significantGamma <- rownames(gammaTable)[which(gammaTable[,"pAdj"]<=0.05)]
+  exprsNorm <- t(apply(data[significantGamma,, drop=FALSE], 1, function(g) (g - mean(g))/sd(g)))
+  gSplit <- split(significantGamma, gammaTable[significantGamma,"gamma"]>0)
+  exprUp <- t(apply(exprsNorm[gSplit$"TRUE", , drop=FALSE], 1, sort))
+  exprDown <- t(apply(exprsNorm[gSplit$"FALSE", , drop=FALSE], 1, function(x) sort(x, decreasing=TRUE)))
+  exprMerged <- rbind(exprUp, exprDown)
+  somOutput <- som(exprMerged, somgrid(xdim=3, ydim=3, topo = "rectangular"))
+  save(somOutput, file=paste(name,"_","result_SOM.RData",sep=""))
+  
+  png(paste(name,"/",name,"_","SOM_results.png",sep=""), width = 1200, height = 600)  # Open a PNG device
+  
+  par(mfrow = c(1, 2))  # Arrange plots side by side
+  
+  # First plot: SOM with cluster boundaries
+  plot(somOutput)
+  som.hc <- cutree(hclust(dist(somOutput$codes[[1]])), 5)
+  add.cluster.boundaries(somOutput, som.hc)
+  
+  # Second plot: Node counts
+  plot(somOutput, type = "count")
+  
+  dev.off()  # Close the PNG device to save the file
+  
+  png(paste(name,"/",name,"_","SOM_quality.png",sep=""), width = 800, height = 600)  # Open PNG device
+
+  plot(somOutput, type = "quality")  # Generate the quality plot
+  
+  dev.off()  # Close the PNG device to save the file
+  patterns <- cbind(gen=rownames(as.data.frame(somOutput$data)), group=somOutput$unit.classif)
+  patterns <- split(patterns[,1], patterns[,2])
+  # Convert list to a data frame with columns aligned
+  max_length <- max(sapply(patterns, length))  # Find longest list
+  df <- data.frame(matrix(NA, nrow = max_length, ncol = length(patterns)))  # Create empty dataframe
+  # Fill columns
+  for (i in seq_along(patterns)) {
+    df[1:length(patterns[[i]]), i] <- patterns[[i]]
+  }
+  # Set column names
+  colnames(df) <- paste0("Pattern ", 1:length(patterns))
+  write_xlsx(df, paste(name,"/",name,"_","SOM_patterns.xlsx",sep=""))
+}
+```
+
+```{r}
+GSE <- c("GSE135251","GSE193066","GSE225740","GSE130970","GSE192959","GSE207310","GSE162694","GSE174478","GSE185051")
+index <- c(45,46,38,47,42,47,45,43,46)
+
+for (i in 1:length(GSE)){
+  data <- load_dataset(GSE[i])
+  meta <- load_meta(GSE[i])
+  genediseasePatterns(data,meta,index[i],GSE[i])
+}
+```
+
+```{r}
+for (i in 6:length(GSE)){
+  data <- load_dataset(GSE[i])
+  meta <- load_meta(GSE[i])
+  genediseasePatterns_SOM(data,meta,index[i],GSE[i])
+}
+```
+
+```{r}
+studies <- list()
+GSE <- c("GSE135251","GSE193066","GSE225740","GSE130970","GSE207310","GSE162694","GSE174478","GSE185051")
+for (i in 1:length(GSE)){
+  studies[[i]] <- as.data.frame(read_xlsx(paste(GSE[i],"/",GSE[i],"_","SOM_patterns.xlsx",sep="")))
+}
+
+colnames(studies[[1]]) <- c("Patern 1", "Patern 2", "Patern 3", "Patern 5", "Patern 6","Patern 7", "Patern 8","Patern 9")
+colnames(studies[[2]]) <- c("Patern 1", "Patern 3", "Patern 4", "Patern 6", "Patern 7","Patern 8", "Patern 9")
+colnames(studies[[3]]) <- c("Patern 1", "Patern 2", "Patern 3", "Patern 4", "Patern 7","Patern 9")
+colnames(studies[[4]]) <- c("Patern 1", "Patern 2", "Patern 3", "Patern 5", "Patern 6","Patern 7", "Patern 8","Patern 9")
+colnames(studies[[5]]) <- c("Patern 1", "Patern 2", "Patern 3", "Patern 6", "Patern 7","Patern 9")
+colnames(studies[[6]]) <- c("Patern 1", "Patern 2", "Patern 3", "Patern 7", "Patern 8","Patern 9")
+colnames(studies[[7]]) <- c("Patern 1", "Patern 3", "Patern 4", "Patern 6", "Patern 7", "Patern 8","Patern 9")
+colnames(studies[[8]]) <- c("Patern 1", "Patern 3", "Patern 4", "Patern 7", "Patern 8","Patern 9")
+
+for (i in 1:length(studies)) {
+  write_xlsx(studies[[i]], paste(GSE[i],"/",GSE[i],"_","SOM_patterns_fixed_naming.xlsx",sep=""))
+}
+
+total_vector <- c()
+for (i in 1:length(studies)){
+  merged_vector <- unlist(studies[[i]], use.names = FALSE)
+  total_vector <- c(total_vector,merged_vector)
+}
+df_counts <- as.data.frame(table(total_vector))
+write_xlsx(df_counts, "genediseasepaterns_unfiltered_gene_counts.xlsx")
+df_counts <- df_counts[df_counts$Freq >= 4,]
+df_patern <- data.frame(matrix(ncol = 8, nrow = 0))
+colnames(df_patern) <- c("GSE135251","GSE193066","GSE225740","GSE130970","GSE207310","GSE162694","GSE174478","GSE185051")
+for (i in 1:nrow(df_counts)){
+  new_row <- data.frame(
+  Column1 = ifelse(length(cols1 <- names(studies[[1]])[sapply(studies[[1]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA,    cols1),
+  Column2 = ifelse(length(cols2 <- names(studies[[2]])[sapply(studies[[2]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols2),
+  Column3 = ifelse(length(cols3 <- names(studies[[3]])[sapply(studies[[3]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols3),
+  Column4 = ifelse(length(cols4 <- names(studies[[4]])[sapply(studies[[4]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols4),
+  Column5 = ifelse(length(cols5 <- names(studies[[5]])[sapply(studies[[5]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols5),
+  Column6 = ifelse(length(cols6 <- names(studies[[6]])[sapply(studies[[6]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols6),
+  Column7 = ifelse(length(cols7 <- names(studies[[7]])[sapply(studies[[7]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols7),
+  Column8 = ifelse(length(cols8 <- names(studies[[8]])[sapply(studies[[8]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols8),
+  stringsAsFactors = FALSE
+)
+df_patern <- rbind(df_patern, new_row)
+}
+colnames(df_patern) <- c("GSE135251","GSE193066","GSE225740","GSE130970","GSE207310","GSE162694","GSE174478","GSE185051")
+df_counts <- cbind(df_counts,df_patern)
+
+load(paste(GSE[i],"_","result_SOM.RData",sep=""))
+
+studies_expUp <- list()
+studies_expDown <- list()
+for(i in 1:length(GSE)){
+  data <- load_dataset(GSE[i])
+  load(paste(GSE[i],"_","result_GAMMA.RData",sep=""))
+  gammaTable <- t(sapply(gammaResult, function(x) c(gamma=x@sample.gamma, p.value=x@p.value)))
+  gammaTable <- cbind(gammaTable, pAdj=p.adjust(p=gammaTable[,"p.value"], method = "fdr", n=nrow(gammaTable))) 
+  gammaTable <- gammaTable[order(abs(gammaTable[,"gamma"]), decreasing=T),] # Sort
+  significantGamma <- rownames(gammaTable)[which(gammaTable[,"pAdj"]<=0.05)]
+  exprsNorm <- t(apply(data[significantGamma,, drop=FALSE], 1, function(g) (g - mean(g))/sd(g)))
+  rownames(exprsNorm) <- significantGamma  # Explicitly set rownames
+  gSplit <- split(significantGamma, gammaTable[significantGamma,"gamma"]>0)
+  studies_expUp[[i]] <- t(apply(exprsNorm[gSplit$"TRUE", , drop=FALSE], 1, sort))
+  studies_expDown[[i]] <- t(apply(exprsNorm[gSplit$"FALSE", , drop=FALSE], 1, function(x) sort(x, decreasing=TRUE)))
+}
+
+total_vector <- c()
+for (i in 1:length(studies_expDown)){
+  merged_vector <- unlist(rownames(studies_expDown[[i]]), use.names = FALSE)
+  total_vector <- c(total_vector,merged_vector)
+}
+expDown_df <- as.data.frame(table(total_vector))
+
+total_vector <- c()
+for (i in 1:length(studies_expUp)){
+  merged_vector <- unlist(rownames(studies_expUp[[i]]), use.names = FALSE)
+  total_vector <- c(total_vector,merged_vector)
+}
+expUp_df <- as.data.frame(table(total_vector))
+
+```
+
+
+```{r}
+total_vector <- c()
+for (i in 1:length(studies)){
+  merged_vector <- unlist(studies[[i]], use.names = FALSE)
+  total_vector <- c(total_vector,merged_vector)
+}
+df_counts <- as.data.frame(table(total_vector))
+
+
+df_patern <- data.frame(matrix(ncol = 8, nrow = 0))
+colnames(df_patern) <- c("GSE135251","GSE193066","GSE225740","GSE130970","GSE207310","GSE162694","GSE174478","GSE185051")
+for (i in 1:nrow(df_counts)){
+  new_row <- data.frame(
+  Column1 = ifelse(length(cols1 <- names(studies[[1]])[sapply(studies[[1]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA,    cols1),
+  Column2 = ifelse(length(cols2 <- names(studies[[2]])[sapply(studies[[2]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols2),
+  Column3 = ifelse(length(cols3 <- names(studies[[3]])[sapply(studies[[3]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols3),
+  Column4 = ifelse(length(cols4 <- names(studies[[4]])[sapply(studies[[4]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols4),
+  Column5 = ifelse(length(cols5 <- names(studies[[5]])[sapply(studies[[5]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols5),
+  Column6 = ifelse(length(cols6 <- names(studies[[6]])[sapply(studies[[6]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols6),
+  Column7 = ifelse(length(cols7 <- names(studies[[7]])[sapply(studies[[7]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols7),
+  Column8 = ifelse(length(cols8 <- names(studies[[8]])[sapply(studies[[8]], function(col) df_counts$total_vector[i] %in% col)]) == 0, NA, cols8),
+  stringsAsFactors = FALSE
+)
+df_patern <- rbind(df_patern, new_row)
+}
+colnames(df_patern) <- c("GSE135251","GSE193066","GSE225740","GSE130970","GSE207310","GSE162694","GSE174478","GSE185051")
+df_counts <- cbind(df_counts,df_patern)
+
+studies_expUp <- list()
+studies_expDown <- list()
+for(i in 1:length(GSE)){
+  data <- load_dataset(GSE[i])
+  load(paste(GSE[i],"_","result_GAMMA.RData",sep=""))
+  gammaTable <- t(sapply(gammaResult, function(x) c(gamma=x@sample.gamma, p.value=x@p.value)))
+  gammaTable <- cbind(gammaTable, pAdj=p.adjust(p=gammaTable[,"p.value"], method = "fdr", n=nrow(gammaTable))) 
+  gammaTable <- gammaTable[order(abs(gammaTable[,"gamma"]), decreasing=T),] # Sort
+  significantGamma <- rownames(gammaTable)[which(gammaTable[,"pAdj"]<=0.05)]
+  exprsNorm <- t(apply(data[significantGamma,, drop=FALSE], 1, function(g) (g - mean(g))/sd(g)))
+  rownames(exprsNorm) <- significantGamma  # Explicitly set rownames
+  gSplit <- split(significantGamma, gammaTable[significantGamma,"gamma"]>0)
+  studies_expUp[[i]] <- t(apply(exprsNorm[gSplit$"TRUE", , drop=FALSE], 1, sort))
+  studies_expDown[[i]] <- t(apply(exprsNorm[gSplit$"FALSE", , drop=FALSE], 1, function(x) sort(x, decreasing=TRUE)))
+}
+
+total_vector <- c()
+for (i in 1:length(studies_expDown)){
+  merged_vector <- unlist(rownames(studies_expDown[[i]]), use.names = FALSE)
+  total_vector <- c(total_vector,merged_vector)
+}
+expDown_df <- as.data.frame(table(total_vector))
+colnames(expDown_df)[2] <- "ExpDown_Count"
+
+total_vector <- c()
+for (i in 1:length(studies_expUp)){
+  merged_vector <- unlist(rownames(studies_expUp[[i]]), use.names = FALSE)
+  total_vector <- c(total_vector,merged_vector)
+}
+expUp_df <- as.data.frame(table(total_vector))
+colnames(expUp_df)[2] <- "ExpUp_Count"
+
+merged_trial <- merge(df_counts, expDown_df, by = "total_vector", all = TRUE)
+merged_trial <- merge(merged_trial, expUp_df, by = "total_vector", all = TRUE)
+
+write_xlsx(merged_trial, "genediseasepatterns_merged_results.xlsx")
+```
+
+
+
+

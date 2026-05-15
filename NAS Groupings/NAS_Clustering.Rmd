@@ -1,0 +1,415 @@
+---
+title: "MASLD Clustering"
+author: "Eren Kumak"
+date: "2025-01-02"
+output: 
+  html_document:
+   toc: true
+   toc_float: 
+     collapsed: false
+     smooth_scroll: true
+   number_sections: true
+---
+
+# Introduction
+
+The aim of this document to create PCA plots of each dataset presented in meta-analysis to understand how each NAFLD Activity Score clustered. 
+
+Document is organized into sections each representing an individual dataset where name is direct GEO accession ID and only PCA with points according to NAS identitiy presented. 
+
+Since the process is repetitive, first chunk of this markdown contains functions which will be called later. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(org.Hs.eg.db)
+library(GEOquery)
+library(Rtsne)
+library(ggfortify)
+library(dplyr)
+library(gridExtra)
+library(sva)
+library(limma)
+library(DESeq2)
+library(edgeR)
+library(plotly)
+library(rmarkdown)
+library(vegan)
+library(pheatmap)
+```
+
+
+```{r functions}
+
+load_dataset <- function(id){
+  a <- fread(paste(id, ".tsv", sep="")) #load the count optained from NCBI-generated RNA-seq
+  gene_names <- mapIds(
+    org.Hs.eg.db,
+    keys = as.character(a$GeneID),
+    column = "SYMBOL", 
+    keytype = "ENTREZID",
+    multiVals = "first"
+) # Get the gene symbols from ENTREZIDs
+  a$GeneID <- gene_names #assign gene names instead of ENTREZID
+  colnames(a)[1] <- "Gene" #change the column name
+  a <- a[!duplicated(a$Gene),] #remove duplicated gene names
+  a <- a[!is.na(a$Gene),] #remove any NAs in gene name
+  a <- as.data.frame(a) #turn to df
+  rownames(a) <- a$Gene #assign gene names as row names.
+  a$Gene <- NULL #remove column
+  return(a) #return fully modified df
+}
+
+load_meta <- function(id){
+  a  <- getGEO(id, GSEMatrix = TRUE) #get the meta data via accession.
+  a  <- pData(a[[1]]) #get the df portion
+  return(a) #return it
+}
+
+pca_nas_2d <- function(data,meta,col_index, name = "RNA-seq"){
+  meta <- meta[rownames(meta) %in% colnames(data),] #Be sure you have meta data for only ones that has counts.
+  colData <- as.data.frame(meta[,col_index]) # create the design df using the col_index for activation score.
+  rownames(colData) <- rownames(meta) #assign sample names as rownames.
+  print(sum(rownames(colData) != colnames(data))) # check whether rownames of colData is same with colnames of data !should return 0
+  colnames(colData) <- "score" #name NAS as score
+  colData$score <- as.factor(colData$score) #factorize them
+  
+  dds <- DESeqDataSetFromMatrix(countData = data, colData = colData, design = ~ score) 
+
+  dds <- DESeq(dds) 
+  group_sizes <- table(colData$score) #Counts how many samples are in each score group.
+  smallest_group_size <- min(group_sizes) #Stores the size of the smallest group 
+  
+  keep <- rowSums(counts(dds) >= 10) >= smallest_group_size #Keeps genes that are expressed (b	%10 reads) in at least as many samples as the smallest group   size. Example: If smallest group has 3 samples, this line keeps genes that are expressed in b	%3 samples.
+  dds <- dds[keep,] #Applies that filter to the dataset.
+  
+ # Apply Variance Stabilizing Transformation (VST)
+  vst_counts <- vst(dds, blind = FALSE)  # 'blind = FALSE because we will use score information in below analysis.
+
+  # Extract the transformed count matrix
+  vst_matrix <- assay(vst_counts) 
+
+  variances <- apply(vst_matrix, 1, var) #get variances of each gene
+  top_genes <- vst_matrix[variances > quantile(variances, 0.75), ] #get genes whose variance is in the top 25%.
+  
+  pca_result <- prcomp(t(top_genes), scale = TRUE) #performs PCA on the transposed top_genes matrix so that samples are rows and genes are columns.
+  
+ autoplot(pca_result, data = colData, colour = 'score') +
+    theme_minimal() +
+    ggtitle(paste("2D PCA of ", name, " colored by NAFLD Activity Score", sep ="")) ##plot the results, color by score.
+}
+
+pca_nas_3d <- function(data,meta,col_index, name = "RNA-seq"){
+  meta <- meta[rownames(meta) %in% colnames(data),] #Be sure you have meta data for only ones that has counts.
+  colData <- as.data.frame(meta[,col_index]) # create the design df
+  rownames(colData) <- rownames(meta) #assign sample names as rownames.
+  print(sum(rownames(colData) != colnames(data))) # check whether rownames of colData is same with colnames of data !should return 0
+  colnames(colData) <- "score" #name NAS as score
+  colData$score <- as.factor(colData$score) #factorize them
+  
+  dds <- DESeqDataSetFromMatrix(countData = data, colData = colData, design = ~ score) 
+  dds <- DESeq(dds)
+  
+  group_sizes <- table(colData$score) #Counts how many samples are in each score group.
+  smallest_group_size <- min(group_sizes) #Stores the size of the smallest group 
+  
+  keep <- rowSums(counts(dds) >= 10) >= smallest_group_size #Keeps genes that are expressed (b	%10 reads) in at least as many samples as the smallest group   size. Example: If smallest group has 3 samples, this line keeps genes that are expressed in b	%3 samples.
+  dds <- dds[keep,] #Applies that filter to the dataset.
+  
+
+  # Apply Variance Stabilizing Transformation (VST)
+  vst_counts <- vst(dds, blind = FALSE)   # 'blind = FALSE because we will use score information in below analysis.
+
+  # Extract the transformed count matrix
+  vst_matrix <- assay(vst_counts)
+
+  variances <- apply(vst_matrix, 1, var) #get variances of each gene
+  top_genes <- vst_matrix[variances > quantile(variances, 0.75), ] #get genes whose variance is in the top 25%.
+  
+  pca_result <- prcomp(t(top_genes), scale = TRUE) #performs PCA on the transposed top_genes matrix so that samples are rows and genes are columns.
+  pca_data_3d <- as.data.frame(pca_result$x[, 1:3])  # First 3 PCs
+  
+ plot_ly(pca_data_3d, x = ~PC1, y = ~PC2, z = ~PC3, color = colData$score,
+                 colors = RColorBrewer::brewer.pal(9, "Set3"), 
+                 type = "scatter3d", mode = "markers") %>%
+    layout(title = paste("3D PCA of ", name, " colored by NAFLD Activity Score", sep = ""),
+           scene = list(xaxis = list(title = 'PC1'),
+                        yaxis = list(title = 'PC2'),
+                        zaxis = list(title = 'PC3'))) #plot results interactively.
+}
+
+statistical_report_pca <- function(data,meta,col_index, name = "RNA-seq"){
+  meta <- meta[rownames(meta) %in% colnames(data),] #Be sure you have meta data for only ones that has counts.
+  colData <- as.data.frame(meta[,col_index]) # create the design df
+  rownames(colData) <- rownames(meta)  #assign sample names as rownames.
+  print(sum(rownames(colData) != colnames(data))) # check whether rownames of colData is same with colnames of data !should return 0
+  colnames(colData) <- "score" #name NAS as score
+  colData$score <- as.factor(colData$score) #factorize them
+  
+  dds <- DESeqDataSetFromMatrix(countData = data, colData = colData, design = ~ score) 
+  dds <- DESeq(dds)
+  
+  group_sizes <- table(colData$score) #Counts how many samples are in each score group.
+  smallest_group_size <- min(group_sizes) #Stores the size of the smallest group 
+  
+  keep <- rowSums(counts(dds) >= 10) >= smallest_group_size #Keeps genes that are expressed (b	%10 reads) in at least as many samples as the smallest group   size. Example: If smallest group has 3 samples, this line keeps genes that are expressed in b	%3 samples.
+  dds <- dds[keep,] #Applies that filter to the dataset.
+  
+  
+  # Apply Variance Stabilizing Transformation (VST)
+  vst_counts <- vst(dds, blind = FALSE)  # 'blind = FALSE because we will use score information in below analysis.
+
+  # Extract the transformed count matrix
+  vst_matrix <- assay(vst_counts)
+
+  variances <- apply(vst_matrix, 1, var) #get variances of each gene
+  top_genes <- vst_matrix[variances > quantile(variances, 0.75), ] #get genes whose variance is in the top 25%
+
+
+  # Initialize an empty matrix to store the p-values for pairwise comparisons
+  p_value_matrix <- matrix(NA, nrow = length(unique(colData$score)), 
+                           ncol = length(unique(colData$score)))
+
+  # Set the group labels as row and column names
+  rownames(p_value_matrix) <- colnames(p_value_matrix) <- sort(unique(colData$score))
+  
+  vst_group <- as.data.frame(t(vst_matrix))
+  vst_group$Group <- as.vector(colData$score)
+  
+  dist_matrix <- dist(vst_group[, -ncol(vst_group)])  # Adjust if you want to use more PCs
+    perm_results <- adonis2(dist_matrix ~ vst_group$Group, permutations = 999)
+    print("PERMANOVA RESULTS FOR Variance Stabilizing Transformation (VST)")
+    cat("\n") 
+    print("############################")
+    print(perm_results)
+    print("############################")
+    cat("\n") 
+  
+  # Perform pairwise PERMANOVA tests for each pair of groups
+  for (i in 1:(nrow(p_value_matrix)-1)) {
+    for (j in (i+1):ncol(p_value_matrix)) {
+      # Subset the data for each pair of groups
+      # group_1 <- pca_data_3d[pca_data_3d$Group == rownames(p_value_matrix)[i], ]
+      # group_2 <- pca_data_3d[pca_data_3d$Group == colnames(p_value_matrix)[j], ]
+      
+       group_1 <- vst_group[vst_group$Group == rownames(p_value_matrix)[i], ]
+       group_2 <- vst_group[vst_group$Group == colnames(p_value_matrix)[j], ]
+      
+      # Combine the two groups into one dataset for distance computation
+      combined_data <- rbind(group_1, group_2)
+      
+      # Compute the distance matrix for the combined data (use Euclidean distance)
+      dist_matrix <- dist(combined_data[, -ncol(combined_data)])  # Adjust for more PCs if needed
+      
+      # Perform PERMANOVA for the pair of groups
+      # Run adonis2 with suppressed warnings
+       suppressWarnings({
+        perm_results <- adonis2(dist_matrix ~ combined_data$Group, permutations = 999)
+       })
+      
+      # Extract the p-value from the 'Pr(>F)' column
+      p_value_matrix[i, j] <-  perm_results$`Pr(>F)`[1] # Adjust if column name is different
+      p_value_matrix[j, i] <- p_value_matrix[i, j]  # Symmetric matrix
+    }
+  }
+  
+  #Extract the upper triangular part of the matrix (excluding the diagonal)
+  raw_p_values <- p_value_matrix[upper.tri(p_value_matrix, diag = FALSE)]
+  
+  # Adjust the p-values using a desired method (e.g., Benjamini-Hochberg)
+  adjusted_p_values <- p.adjust(raw_p_values, method = "BH")  # Or "bonferroni", "holm"
+  
+  # Create a new matrix to store the adjusted p-values
+  adjusted_p_value_matrix <- p_value_matrix
+  
+  # Replace the upper triangular part with the adjusted p-values
+  adjusted_p_value_matrix[upper.tri(adjusted_p_value_matrix, diag = FALSE)] <- adjusted_p_values
+  
+  # Since the matrix is symmetric, copy the upper triangular part to the lower triangular part
+  adjusted_p_value_matrix[lower.tri(adjusted_p_value_matrix)] <- t(adjusted_p_value_matrix)[lower.tri(adjusted_p_value_matrix)]
+  
+  # Print the pairwise p-value matrix adjusted
+  print("Pairwise PERMANOVA RESULTS ON Variance Stabilizing Transformation (VST)")
+  cat("\n") 
+  print("############################")
+  print(adjusted_p_value_matrix)
+  print("############################")
+  cat("\n") 
+  }
+```
+
+```{r}
+# I could have put a simple for loop below but since it was not many and I wanted to seperate datasets in the last HTML I did not
+```
+
+# GSE135251
+
+```{r GSE135251, message=FALSE}
+GSE135251 <- load_dataset("GSE135251")
+GSE135251_meta <- load_meta("GSE135251")
+```
+
+```{r GSE135251_3D, message=FALSE}
+pca_nas_3d(GSE135251,GSE135251_meta,44,"GSE135251")
+```
+
+```{r GSE135251_2D, message=FALSE}
+pca_nas_2d(GSE135251,GSE135251_meta,44,"GSE135251")
+```
+
+```{r GSE135251_stats}
+statistical_report_pca(GSE135251,GSE135251_meta,44,"GSE135251")
+```
+
+
+# GSE193066 
+
+```{r GSE193066}
+GSE193066 <- load_dataset("GSE193066")
+GSE193066_meta <- load_meta("GSE193066")
+```
+
+```{r GSE193066_3D, message=FALSE}
+pca_nas_3d(GSE193066,GSE193066_meta,45,"GSE193066")
+```
+
+```{r GSE193066_2D, message=FALSE}
+pca_nas_2d(GSE193066,GSE193066_meta,45,"GSE193066")
+```
+
+```{r GSE193066_stats}
+statistical_report_pca(GSE193066,GSE193066_meta,45,"GSE193066")
+```
+
+# GSE225740
+
+```{r GSE225740}
+GSE225740 <- load_dataset("GSE225740")
+GSE225740_meta <- load_meta("GSE225740")
+```
+
+```{r GSE225740_3D, message=FALSE}
+pca_nas_3d(GSE225740,GSE225740_meta,38,"GSE225740")
+```
+
+```{r GSE225740_2D, message=FALSE}
+pca_nas_2d(GSE225740,GSE225740_meta,38,"GSE225740")
+```
+
+```{r GSE225740_stats}
+statistical_report_pca(GSE225740,GSE225740_meta,38,"GSE225740")
+```
+
+# GSE130970
+
+```{r GSE130970}
+GSE130970 <- load_dataset("GSE130970")
+GSE130970_meta <- load_meta("GSE130970")
+```
+
+```{r GSE130970_3D, message=FALSE}
+pca_nas_3d(GSE130970,GSE130970_meta,46,"GSE130970")
+```
+
+```{r GSE130970_2D, message=FALSE}
+pca_nas_2d(GSE130970,GSE130970_meta,46,"GSE130970")
+```
+
+```{r GSE130970_stats}
+statistical_report_pca(GSE130970,GSE130970_meta,46,"GSE130970")
+```
+
+# GSE192959
+
+```{r GSE192959}
+GSE192959 <- load_dataset("GSE192959")
+GSE192959_meta <- load_meta("GSE192959")
+```
+
+```{r GSE192959_3D, message=FALSE}
+pca_nas_3d(GSE192959,GSE192959_meta,41,"GSE192959")
+```
+
+```{r GSE192959_2D, message=FALSE}
+pca_nas_2d(GSE192959,GSE192959_meta,41,"GSE192959")
+```
+
+```{r GSE192959_stats}
+statistical_report_pca(GSE192959,GSE192959_meta,41,"GSE192959")
+```
+
+# GSE207310
+
+```{r GSE207310}
+GSE207310 <- load_dataset("GSE207310")
+GSE207310_meta <- load_meta("GSE207310")
+```
+
+```{r GSE207310_3D, message=FALSE}
+pca_nas_3d(GSE207310,GSE207310_meta,46,"GSE207310")
+```
+
+```{r GSE207310_2D, message=FALSE}
+pca_nas_2d(GSE207310,GSE207310_meta,46,"GSE207310")
+```
+
+```{r GSE207310_stats}
+statistical_report_pca(GSE207310,GSE207310_meta,46,"GSE207310")
+```
+
+# GSE162694
+
+```{r GSE162694}
+GSE162694 <- load_dataset("GSE162694")
+GSE162694_meta <- load_meta("GSE162694")
+```
+
+```{r GSE162694_3D, message=FALSE}
+pca_nas_3d(GSE162694,GSE162694_meta,44,"GSE162694")
+```
+
+```{r GSE162694_2D, message=FALSE}
+pca_nas_2d(GSE162694,GSE162694_meta,44,"GSE162694")
+```
+
+```{r GSE162694_stats}
+statistical_report_pca(GSE162694,GSE162694_meta,44,"GSE162694")
+```
+
+# GSE174478
+
+```{r GSE174478}
+GSE174478 <- load_dataset("GSE174478")
+GSE174478_meta <- load_meta("GSE174478")
+```
+
+```{r GSE174478_3D, message=FALSE}
+pca_nas_3d(GSE174478,GSE174478_meta,42,"GSE174478")
+```
+
+```{r GSE174478_2D, message=FALSE}
+pca_nas_2d(GSE174478,GSE174478_meta,42,"GSE174478")
+```
+
+```{r GSE174478_stats}
+statistical_report_pca(GSE174478,GSE174478_meta,42,"GSE174478")
+```
+
+# GSE185051
+
+```{r GSE185051}
+GSE185051 <- load_dataset("GSE185051")
+GSE185051_meta <- load_meta("GSE185051")
+```
+
+```{r GSE185051_3D, message=FALSE}
+pca_nas_3d(GSE185051,GSE185051_meta,46,"GSE185051")
+```
+
+```{r GSE185051_2D, message=FALSE}
+pca_nas_2d(GSE185051,GSE185051_meta,46,"GSE185051")
+```
+
+```{r GSE185051_stats}
+statistical_report_pca(GSE185051,GSE185051_meta,46,"GSE185051")
+```

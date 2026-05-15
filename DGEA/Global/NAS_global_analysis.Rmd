@@ -1,0 +1,142 @@
+---
+title: "Global Analysis"
+author: "Eren Kumak"
+date: "2025-02-22"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(data.table)
+library(org.Hs.eg.db)
+library(GEOquery)
+library(Rtsne)
+library(ggfortify)
+library(dplyr)
+library(gridExtra)
+library(sva)
+library(limma)
+library(DESeq2)
+library(edgeR)
+library(plotly)
+library(rmarkdown)
+library(vegan)
+library(tidyr)
+library(pheatmap)
+library(rococo)
+library(parallel)
+library(pbapply)
+library(kohonen)
+library(writexl)
+library(readxl)
+set.seed(42)
+```
+
+```{r}
+load_dataset <- function(id){
+  a <- fread(paste(id, ".tsv", sep="")) #load the count optained from NCBI-generated RNA-seq
+  gene_names <- mapIds(
+    org.Hs.eg.db,
+    keys = as.character(a$GeneID),
+    column = "SYMBOL", 
+    keytype = "ENTREZID",
+    multiVals = "first"
+) # Get the gene symbols from ENTREZIDs
+  a$GeneID <- gene_names #assign gene names instead of ENTREZID
+  colnames(a)[1] <- "Gene" #change the column name
+  a <- a[!duplicated(a$Gene),] #remove duplicated gene names
+  a <- a[!is.na(a$Gene),] #remove any NAs in gene name
+  a <- as.data.frame(a) #turn to df
+  rownames(a) <- a$Gene #assign gene names as row names.
+  a$Gene <- NULL #remove column
+  return(a) #return fully modified df
+}
+
+load_meta <- function(id){
+  a  <- getGEO(id, GSEMatrix = TRUE) #get the meta data via accession.
+  a  <- pData(a[[1]]) #get the df portion
+  return(a) #return it
+}
+
+global <- function(data_list,meta_list,col_index_list,name_list){
+  for (i in 1:length(meta_list)) {
+    meta_list[[i]] <- as.data.frame(meta_list[[i]][rownames(meta_list[[i]]) %in% colnames(data_list[[i]]),]) #Keeps only metadata rows for which sample names exist in the count data.
+    names <- rownames(meta_list[[i]]) #stores sample names (to restore them later as row names).
+    meta_list[[i]] <- as.data.frame(meta_list[[i]][,col_index_list[i]]) #pull the NAS
+    rownames(meta_list[[i]]) <- names #Restores the correct row names (sample IDs) to the subsetted metadata.
+    colnames(meta_list[[i]]) <- "NAS" #Renames the selected column to "NAS"
+    meta_list[[i]]$STUDY <- name_list[i] #Adds a new column STUDY indicating which dataset each row belongs to (from name_list[i]).
+  }
+  
+  
+  common_rows <- Reduce(intersect, lapply(data_list, function(df) rownames(df))) #get common genes
+  # Filter each dataset to contain only common rows & sort them
+  data_list <- lapply(data_list, function(df) {
+    df <- df[rownames(df) %in% common_rows, ]  # Keep only common rows
+    df <- df[order(rownames(df)), ]  # Sort by column 'X'
+    return(df)
+  })
+  
+  merged_data <- do.call(cbind, data_list) #Combines all count matrices in data_list column-wise (i.e., merges samples).
+  merged_meta <- do.call(rbind, meta_list) #Combines all meta_list elements row-wise (i.e., merges sample metadata).
+  print(sum(rownames(merged_meta) != colnames(merged_data))) #this should print 0
+  
+  merged_meta <- merged_meta[!merged_meta[, 1] == "NA", , drop = FALSE] #remove NA
+    merged_meta <- merged_meta %>% mutate(
+      NAS = as.integer(NAS),
+      NAS = case_when(
+    NAS %in% c(0,1,2) ~ 0,
+    NAS %in% c(3) ~ 1,
+    NAS %in% c(4) ~ 2,
+    NAS %in% c(5) ~ 3,
+    NAS %in% c(6,7,8) ~ 4,
+    TRUE ~ NAS
+  )) #cluster the scores accordingly
+  merged_data <- merged_data[,colnames(merged_data) %in% rownames(merged_meta)] #Filters the merged_data matrix to only include samples that have matching metadata in merged_meta
+  merged_meta$NAS <- as.factor(merged_meta$NAS) #Converts the NAS score to a factor.
+  merged_meta$STUDY <- as.factor(merged_meta$STUDY) #onverts the STUDY column to a factor.
+  adjusted_counts <- ComBat_seq(as.matrix(merged_data), batch=merged_meta$STUDY, group=merged_meta$NAS) #Applies ComBat-seq, a method from the sva package tailored for raw count data. Batch is only study while aiming to preserve NAS as biological group and does not check for any other meta (which is not always avaiable in all)
+  dds <- DESeqDataSetFromMatrix(countData = adjusted_counts, colData = merged_meta, design = ~ NAS) #classic DESeq2s on combat corrected
+  dds <- dds[rowSums(counts(dds) >= 10) >= 0.95 * ncol(dds), ] #Keeps genes that have counts ≥ 10 in at least 95% of the samples.
+  dds <- DESeq(dds) 
+  vst_counts <- vst(dds, blind = FALSE) #get vst cunts
+  vst_matrix <- assay(vst_counts) #access the matirx
+  pca_result <- prcomp(t(vst_matrix), scale = TRUE) #run pca
+   autoplot(pca_result, data = merged_meta, colour = 'STUDY') +
+    theme_minimal() +
+    ggtitle("2D PCA OF GLOBAL ANALYSIS COLORED BY STUDY") #plot results
+   comb <- as.data.frame(t(combn(0:4, 2))) #get combinations of 4 2
+  colnames(comb) <- c("A", "B") #rename all
+  for (i in 1:nrow(comb)){
+    res <- data.frame(DESeq2::results(dds, contrast = c("NAS",comb$B[i],comb$A[i]), cooksCutoff = FALSE))
+    write.csv(res,paste("GLOBAL","/","NAS_DESEQ2_GLOBAL_",as.character(comb$B[i]),"_VS_",as.character(comb$A[i]),".csv",sep=""))
+  } #get all combinatory comparisons where control is the lover group.
+  permanova <- adonis2(t(vst_matrix) ~ NAS, data = merged_meta)
+  print(permanova) #p < 0.001 for f statistic (4.1271) but the effect size is small explaining 1.8% variance.
+}
+```
+
+```{r}
+GSE <- c("GSE135251","GSE193066","GSE225740","GSE130970","GSE192959","GSE207310","GSE162694","GSE174478","GSE185051")
+index <- c(45,46,38,47,42,47,45,43,46)
+
+studies_data <- list()
+studies_meta <- list()
+
+for (i in 1:length(GSE)){
+ data <- load_dataset(GSE[i])
+ meta <- load_meta(GSE[i])
+ studies_data[[i]] <- data
+ studies_meta[[i]] <- meta
+}
+data_list <- studies_data
+meta_list <- studies_meta
+col_index_list <- index
+name_list <- GSE
+global(studies_data,studies_meta,index,GSE)
+```
+
+

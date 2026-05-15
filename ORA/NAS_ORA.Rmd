@@ -1,0 +1,153 @@
+---
+title: "NAS_ORA"
+author: "Eren Kumak"
+date: "2026-05-15"
+output: html_document
+---
+
+```{r libraries, echo=FALSE}
+library(writexl)
+library(GEOquery)
+library(readxl)
+library(enrichplot)
+library(igraph)
+library(ggraph)
+library(msigdbr)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ggplot2)
+library(dorothea)
+library(dplyr)
+library(biomaRt)
+library(stats)
+library(viper)
+library(Biobase)
+library(decoupleR)
+library(tibble)
+library(tidyr)
+library(OmnipathR)
+```
+
+```{r data_load}
+#overview <- read_xlsx("overall_meta_analysis_overview.xlsx")
+overview <- read_xlsx("overall_meta_analysis_overview_directions.xlsx")
+overview$total_score <- overview$total_upregulated + overview$total_downregulated
+```
+
+```{r}
+cutoff <- quantile(overview$total_score, 0.95)
+print(cutoff)
+
+selected_genes <- overview[overview$total_score >= cutoff,]$Gene
+```
+
+
+```{r over_representation_analysis}
+##### MSigDB
+
+msig_hallmark <- msigdbr(species = "Homo sapiens", category = "C8")
+hallmark_list <- msig_hallmark[, c("gs_name", "gene_symbol")]
+
+ora_hallmark <- enricher(gene = selected_genes,
+                         TERM2GENE = hallmark_list,
+                         pAdjustMethod = "BH",
+                         qvalueCutoff = 0.05)
+
+head(as.data.frame(ora_hallmark))
+
+data_framed_ora <- as.data.frame(ora_hallmark)
+write_xlsx(data_framed_ora,"overview_95_msigdb_C8.xlsx")
+p <- barplot(ora_hallmark,
+             drop = TRUE,
+             showCategory = 10,
+             title = "MSigDB = C8",
+             font.size = 10)
+
+# Save as 600 DPI PNG
+ggsave("ORA_MSigDB_C8.png",
+       plot = p,
+       width = 8, height = 6, dpi = 600, units = "in")
+#dotplot(ora_hallmark, showCategory = 10, title = "Hallmark Enrichment")
+
+################################
+
+### DoRothEA ORA
+
+# Load high-confidence TF–target interactions
+data(dorothea_hs)
+dorothea_regulon <- dorothea_hs %>% 
+  filter(confidence %in% c("A", "B", "C"))
+
+# Create TERM2GENE format
+term2gene <- dorothea_regulon %>% select(tf, target)
+
+ora_tf <- enricher(gene = selected_genes,
+                   TERM2GENE = term2gene,
+                   pAdjustMethod = "BH",
+                   qvalueCutoff = 0.05)
+
+head(as.data.frame(ora_tf))
+
+data_framed_ora <- as.data.frame(ora_tf)
+write_xlsx(data_framed_ora,"overview_95_ORA_DoRothEA.xlsx")
+p <- barplot(ora_tf, showCategory = 17, title = "TF Enrichment (DoRothEA)")
+ggsave("ORA_DoRothEA.png",
+       plot = p,
+       width = 8, height = 6, dpi = 600, units = "in")
+
+write.table(selected_genes, file = "selected_genes.txt", row.names = FALSE, col.names = FALSE, quote = FALSE)
+
+
+
+################################ ORA - MSigDB - Directed
+selected_genes_upregulated <- overview_directed[overview_directed$Gene %in% selected_genes & overview_directed$total_upregulated > overview_directed$total_downregulated, ]$Gene
+selected_genes_downregulated <- overview_directed[overview_directed$Gene %in% selected_genes & overview_directed$total_upregulated < overview_directed$total_downregulated, ]$Gene
+
+msig_hallmark <- msigdbr(species = "Homo sapiens", category = "H")
+hallmark_list <- msig_hallmark[, c("gs_name", "gene_symbol")]
+
+ora_hallmark <- enricher(gene = selected_genes_upregulated,
+                         TERM2GENE = hallmark_list,
+                         pAdjustMethod = "BH",
+                         qvalueCutoff = 0.05)
+
+head(as.data.frame(ora_hallmark))
+
+data_framed_ora <- as.data.frame(ora_hallmark)
+write_xlsx(data_framed_ora,"overview_95_msigdb_H_upregulated.xlsx")
+p <- barplot(ora_hallmark,
+             drop = TRUE,
+             showCategory = 10,
+             title = "ORA - MSigDB = H (ONLY UPREGULATED GENES)",
+             font.size = 10)
+
+# Save as 600 DPI PNG
+ggsave("ORA_MSigDB_H_upregulated.png",
+       plot = p,
+       width = 8, height = 6, dpi = 600, units = "in")
+
+
+
+################################ ORA - Dorothea - Directed
+
+data(dorothea_hs)
+dorothea_regulon <- dorothea_hs %>% 
+  filter(confidence %in% c("A", "B", "C"))
+
+# Create TERM2GENE format
+term2gene <- dorothea_regulon %>% select(tf, target)
+
+ora_tf <- enricher(gene = selected_genes_upregulated,
+                   TERM2GENE = term2gene,
+                   pAdjustMethod = "BH",
+                   qvalueCutoff = 0.05)
+
+head(as.data.frame(ora_tf))
+
+data_framed_ora <- as.data.frame(ora_tf)
+write_xlsx(data_framed_ora,"overview_95_ORA_DoRothEA_UPREGULATED.xlsx")
+p <- barplot(ora_tf, showCategory = 17, title = "ORA - TF Enrichment (DoRothEA) - UPREGULATED GENES")
+ggsave("ORA_DoRothEA_UPREGULATED.png",
+       plot = p,
+       width = 8, height = 6, dpi = 600, units = "in")
+```

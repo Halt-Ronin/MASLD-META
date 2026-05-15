@@ -1,0 +1,107 @@
+---
+title: "Score"
+author: "Eren Kumak"
+date: "2025-11-15"
+output: html_document
+---
+
+```{r libraries, echo=FALSE}
+library(writexl)
+library(readxl)
+library(ggplot2)
+library(dplyr)
+```
+
+## NAS
+
+```{r data_load}
+#overview <- read_xlsx("overall_meta_analysis_overview.xlsx")
+overview <- read_xlsx("overall_meta_analysis_overview_directions.xlsx")
+overview$total_score <- overview$total_upregulated + overview$total_downregulated
+```
+
+
+```{r thresholding_methods}
+hist(overview$total_score, breaks = 20, main = "Score Distribution", xlab = "Score")
+
+cutoff <- quantile(overview$total_score, 0.95)
+print(cutoff)
+
+selected_genes <- overview[overview$total_score >= cutoff,]$Gene
+
+########### Figure
+
+cutoff_1 <- quantile(overview$total_score, 0.99)
+cutoff_5 <- quantile(overview$total_score, 0.95)
+
+# Save as 600 DPI PNG
+png("score_distribution.png", width = 6, height = 4, units = "in", res = 600)
+
+# Plot histogram
+hist(overview$total_score, 
+     main = "Score Distribution", 
+     xlab = "Score", 
+     col = "lightgray", 
+     border = "white")
+
+# Add vertical lines for cutoffs
+abline(v = cutoff_1, col = "red", lwd = 2, lty = 2)
+abline(v = cutoff_5, col = "blue", lwd = 2, lty = 2)
+
+# Add legend with numeric values
+legend("topright", 
+       legend = c(paste0("1% cutoff: ", round(cutoff_1, 2)),
+                  paste0("5% cutoff: ", round(cutoff_5, 2))), 
+       col = c("red", "blue"), 
+       lty = 2, 
+       lwd = 2)
+
+dev.off()
+```
+
+## Fibrosis
+
+
+```{r data_load}
+overview <- read_xlsx("overall_meta_analysis_overview_directions_fibrosis.xlsx")
+```
+
+
+```{r thresholding_methods}
+
+hist(overview$total, breaks = 20, main = "Score Distribution", xlab = "Score")
+
+cutoff <- quantile(overview$total, 0.95)
+print(cutoff)
+
+selected_genes <- overview[overview$total >= cutoff,]$Gene
+
+########### Figure
+
+cutoff_1 <- quantile(overview$total, 0.99)
+cutoff_5 <- quantile(overview$total, 0.95)
+
+# Save as 600 DPI PNG
+png("score_distribution.png", width = 6, height = 4, units = "in", res = 600)
+
+# Plot histogram
+hist(overview$total, 
+     main = "Score Distribution", 
+     xlab = "Score", 
+     col = "lightgray", 
+     border = "white")
+
+# Add vertical lines for cutoffs
+abline(v = cutoff_1, col = "red", lwd = 2, lty = 2)
+abline(v = cutoff_5, col = "blue", lwd = 2, lty = 2)
+
+# Add legend with numeric values
+legend("topright", 
+       legend = c(paste0("1% cutoff: ", round(cutoff_1, 2)),
+                  paste0("5% cutoff: ", round(cutoff_5, 2))), 
+       col = c("red", "blue"), 
+       lty = 2, 
+       lwd = 2)
+
+dev.off()
+```

@@ -1,0 +1,314 @@
+---
+title: "NAS_Regression"
+author: "Eren Kumak"
+date: "2025-01-21"
+output: html_document
+output: 
+  html_document:
+   toc: true
+   toc_float: 
+     collapsed: false
+     smooth_scroll: true
+   number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+This document is made for regressions of the meta-analyzed datasets.
+
+```{r setup, include=FALSE}
+library(data.table)
+library(org.Hs.eg.db)
+library(GEOquery)
+library(Rtsne)
+library(ggfortify)
+library(dplyr)
+library(gridExtra)
+library(sva)
+library(limma)
+library(DESeq2)
+library(edgeR)
+library(plotly)
+library(rmarkdown)
+library(vegan)
+library(tidyr)
+library(pheatmap)
+set.seed(42)
+```
+
+```{r functions}
+
+load_dataset <- function(id){
+  a <- fread(paste(id, ".tsv", sep="")) #load the count optained from NCBI-generated RNA-seq
+  gene_names <- mapIds(
+    org.Hs.eg.db,
+    keys = as.character(a$GeneID),
+    column = "SYMBOL", 
+    keytype = "ENTREZID",
+    multiVals = "first"
+) # Get the gene symbols from ENTREZIDs
+  a$GeneID <- gene_names #assign gene names instead of ENTREZID
+  colnames(a)[1] <- "Gene" #change the column name
+  a <- a[!duplicated(a$Gene),] #remove duplicated gene names
+  a <- a[!is.na(a$Gene),] #remove any NAs in gene name
+  a <- as.data.frame(a) #turn to df 
+  rownames(a) <- a$Gene #assign gene names as row names.
+  a$Gene <- NULL #remove column
+  return(a) #return fully modified df
+}
+
+load_meta <- function(id){
+  a  <- getGEO(id, GSEMatrix = TRUE) #get the meta data via accession.
+  a  <- pData(a[[1]]) #get the df portion
+  return(a) #return it
+}
+
+regression <- function(data,meta,col_index,name){
+  meta <- meta[rownames(meta) %in% colnames(data),] #only get the samples where count data is availasble
+  colData <- as.data.frame(meta[,col_index]) # create the design df
+  rownames(colData) <- rownames(meta) #assign sample names as rownames.
+  print(sum(rownames(colData) != colnames(data))) # check whether rownames of colData is same with colnames of data !should return 0
+  colnames(colData) <- "score" #name NAS as score
+  colData <- colData[!colData[, 1] == "NA", , drop = FALSE] #delete any NAs
+    colData <- colData %>% mutate(
+      score = as.integer(score),
+      score = case_when(
+    score %in% c(0,1,2) ~ 210,
+    score %in% c(6,7,8) ~ 876,
+    TRUE ~ score
+  )) #make score integer as well as group 0 1 2 and 6 7 8 together
+  colData$score <- as.factor(colData$score) #factorize them
+  data <- data[,colnames(data) %in% rownames(colData)] #make sure data contains score-available ones
+  dds <- DESeqDataSetFromMatrix(countData = data, colData = colData, design = ~ score) #classic DESeq2
+  dds <- DESeq(dds) 
+  
+  group_sizes <- table(colData$stage) #Counts how many samples are in each score group.
+  smallest_group_size <- min(group_sizes) #Stores the size of the smallest group 
+  keep <- rowSums(counts(dds) >= 10) >= smallest_group_size #Keeps genes that are expressed (b	%10 reads) in at least as many samples as the smallest group   size. Example: If smallest group has 3 samples, this line keeps genes that are expressed in b	%3 samples.
+  dds <- dds[keep,] #Applies that filter to the dataset.
+
+  # Apply Variance Stabilizing Transformation (VST)
+  vst_counts <- vst(dds, blind = FALSE) # 'blind = FALSE because we will use score information in below analysis.
+
+  # Extract the transformed count matrix
+  vst_matrix <- assay(vst_counts)
+  vst_matrix_df <- as.data.frame(vst_matrix)
+  q <- 0
+ for (i in 1:nrow(vst_matrix_df)) {
+  # Prepare the data for the current gene (row i)
+  DF1_long <- vst_matrix_df[i,] %>%
+    gather(key = "Sample", value = "VST_count", 1:ncol(vst_matrix_df[i,])) #converts the wide row into long format: column stores sample names (previous column names). stores the actual expression values. (So one row per sample)
+  
+  DF1_long$Group <- colData$score # add group info
+  DF1_long$Group <- factor(DF1_long$Group, levels = c(210, 3, 4, 5, 876)) #Converts it to a factor with a defined order of levels.
+  
+  model <- lm(VST_count ~ Group, data = DF1_long) #Fits a linear model to test whether the gene expression differs across the Group levels.
+  
+  model_summary <- summary(model) #Stores full summary output of the linear model, including coefficients, F-statistic, R², etc.
+  slope_value <- coef(model)[2] #Extracts the slope of the second term (the first Group level after the intercept).
+  slope_direction <- ifelse(slope_value > 0, "positive", ifelse(slope_value < 0, "negative", "zero")) #Determines whether the slope is positive, negative, or zero.
+  f_statistic <- model_summary$fstatistic[1]  # F-statistic value
+  df1 <- model_summary$fstatistic[2]  # Degrees of freedom for the numerator
+  df2 <- model_summary$fstatistic[3]  # Degrees of freedom for the denominator
+
+  f_statistic_p_value <- pf(f_statistic, df1 = df1, df2 = df2, lower.tail = FALSE) # Calculate p-value for the F-statistic
+  r_squared <- model_summary$r.squared    # R-squared value
+  
+    if (q == 0){
+          results_df <- data.frame(
+          Gene = rownames(vst_matrix_df)[i],
+          F_Statistics = f_statistic,
+          P_Value = f_statistic_p_value,
+          R_squared = r_squared,
+          Slope_value = slope_value,
+          Slope_direction = slope_direction,
+          stringsAsFactors = FALSE
+      )
+      q = q + 1
+    }else{
+      results_df <- rbind(results_df, data.frame(
+            Gene = rownames(vst_matrix_df)[i],
+          F_Statistics = f_statistic,
+          P_Value = f_statistic_p_value,
+          R_squared = r_squared,
+          Slope_value = slope_value,
+          Slope_direction = slope_direction,
+          stringsAsFactors = FALSE
+        ))
+    }
+ }
+  
+  if (!dir.exists(name)) {
+  dir.create(name)
+}
+
+# Define the file path
+file_path <- file.path(name, paste(name,"_regression.csv",sep=""))
+
+# Save the dataframe as a CSV file
+if (exists("results_df")){
+ write.csv(results_df, file = file_path, row.names = FALSE) 
+}
+}
+
+```
+
+# GSE135251
+
+```{r GSE135251, message=FALSE}
+GSE135251 <- load_dataset("GSE135251")
+GSE135251_meta <- load_meta("GSE135251")
+regression(GSE135251,GSE135251_meta,col_index = 45,"GSE135251")
+```
+
+# GSE193066 
+
+```{r GSE193066}
+GSE193066 <- load_dataset("GSE193066")
+GSE193066_meta <- load_meta("GSE193066")
+regression(GSE193066,GSE193066_meta,46,"GSE193066")
+```
+
+# GSE225740
+
+```{r GSE225740}
+GSE225740 <- load_dataset("GSE225740")
+GSE225740_meta <- load_meta("GSE225740")
+regression(GSE225740,GSE225740_meta,38,"GSE225740")
+```
+
+# GSE130970
+
+```{r GSE130970}
+GSE130970 <- load_dataset("GSE130970")
+GSE130970_meta <- load_meta("GSE130970")
+regression(GSE130970,GSE130970_meta,47,"GSE130970")
+```
+
+# GSE192959
+
+```{r GSE192959}
+GSE192959 <- load_dataset("GSE192959")
+GSE192959_meta <- load_meta("GSE192959")
+regression(GSE192959,GSE192959_meta,42,"GSE192959")
+```
+
+# GSE207310
+
+```{r GSE207310}
+GSE207310 <- load_dataset("GSE207310")
+GSE207310_meta <- load_meta("GSE207310")
+regression(GSE207310,GSE207310_meta,47,"GSE207310")
+```
+
+# GSE162694
+
+```{r GSE162694}
+GSE162694 <- load_dataset("GSE162694")
+GSE162694_meta <- load_meta("GSE162694")
+regression(GSE162694,GSE162694_meta,45,"GSE162694")
+```
+
+# GSE174478
+
+```{r GSE174478}
+GSE174478 <- load_dataset("GSE174478")
+GSE174478_meta <- load_meta("GSE174478")
+regression(GSE174478,GSE174478_meta,43,"GSE174478")
+```
+
+# GSE185051
+
+```{r GSE185051}
+GSE185051 <- load_dataset("GSE185051")
+GSE185051_meta <- load_meta("GSE185051")
+regression(GSE185051,GSE185051_meta,46,"GSE185051")
+```
+
+```{r}
+GSE135251 <- read.csv("GSE135251_regression.csv") #load data
+GSE135251$adjusted_p_value <- p.adjust(GSE135251$P_Value, method = "BH") #p.adjust by  Benjamini-Hochberg
+GSE135251$Study <- "GSE135251" #create a study column
+
+GSE193066 <- read.csv("GSE193066_regression.csv") #load data
+GSE193066$adjusted_p_value <- p.adjust(GSE193066$P_Value, method = "BH") #p.adjust by  Benjamini-Hochberg
+GSE193066$Study <- "GSE193066" #create a study column
+
+GSE225740 <- read.csv("GSE225740_regression.csv") #load data
+GSE225740$adjusted_p_value <- p.adjust(GSE225740$P_Value, method = "BH") #p.adjust by  Benjamini-Hochberg
+GSE225740$Study <- "GSE225740" #create a study column
+
+GSE130970 <- read.csv("GSE130970_regression.csv") #load data
+GSE130970$adjusted_p_value <- p.adjust(GSE130970$P_Value, method = "BH") #p.adjust by  Benjamini-Hochberg
+GSE130970$Study <- "GSE130970" #create a study column
+
+GSE192959 <- read.csv("GSE192959_regression.csv") #load data
+GSE192959$adjusted_p_value <- p.adjust(GSE192959$P_Value, method = "BH") #p.adjust by  Benjamini-Hochberg
+GSE192959$Study <- "GSE192959" #create a study column
+
+GSE207310 <- read.csv("GSE207310_regression.csv") #load data
+GSE207310$adjusted_p_value <- p.adjust(GSE207310$P_Value, method = "BH") #p.adjust by  Benjamini-Hochberg
+GSE207310$Study <- "GSE207310" #create a study column
+
+GSE162694 <- read.csv("GSE162694_regression.csv") #load data
+GSE162694$adjusted_p_value <- p.adjust(GSE162694$P_Value, method = "BH") #p.adjust by  Benjamini-Hochberg
+GSE162694$Study <- "GSE162694" #create a study column
+
+GSE174478 <- read.csv("GSE174478_regression.csv") #load data
+GSE174478$adjusted_p_value <- p.adjust(GSE174478$P_Value, method = "BH") #p.adjust by  Benjamini-Hochberg
+GSE174478$Study <- "GSE174478" #create a study column
+
+GSE185051 <- read.csv("GSE185051_regression.csv") #load data
+GSE185051$adjusted_p_value <- p.adjust(GSE185051$P_Value, method = "BH") #p.adjust by  Benjamini-Hochberg
+GSE185051$Study <- "GSE185051" #create a study column
+
+merged_df <- rbind(GSE135251, GSE193066) #merge
+merged_df <- rbind(merged_df, GSE225740) #merge
+merged_df <- rbind(merged_df, GSE130970) #merge
+merged_df <- rbind(merged_df, GSE192959) #merge
+merged_df <- rbind(merged_df, GSE207310) #merge
+merged_df <- rbind(merged_df, GSE162694) #merge
+merged_df <- rbind(merged_df, GSE174478) #merge
+merged_df <- rbind(merged_df, GSE185051) #merge
+
+merged_df <- as.data.table(merged_df) #make data.table
+
+merged_df <- merged_df[merged_df$adjusted_p_value < 0.05,] #only keep with p.adj significant
+
+gene_list <- levels(as.factor(merged_df$Gene)) #get the current genes
+q = 0
+for (i in gene_list){
+  temporary <- merged_df[merged_df$Gene == i,] #temp df of the ith gene
+    if (q == 0){
+          results_df <- data.frame( 
+          Gene = temporary$Gene[1],
+          Average_R_squared = mean(temporary$R_squared),
+          Average_Slope_value = mean(temporary$Slope_value),
+          Common_Slope_direction = ifelse((mean(temporary$Slope_value) > 0), "Positive","Negative"),
+          Count = nrow(temporary),
+          Count_Positive = sum(temporary$Slope_value > 0),
+          Count_Negative = sum(temporary$Slope_value < 0),
+          stringsAsFactors = FALSE
+      )
+      q = q + 1
+    }else{
+      results_df <- rbind(results_df,data.frame(
+          Gene = temporary$Gene[1],
+          Average_R_squared = mean(temporary$R_squared),
+          Average_Slope_value = mean(temporary$Slope_value),
+          Common_Slope_direction = ifelse((mean(temporary$Slope_value) > 0), "Positive","Negative"),
+          Count = nrow(temporary),
+          Count_Positive = sum(temporary$Slope_value > 0),
+          Count_Negative = sum(temporary$Slope_value < 0),
+          stringsAsFactors = FALSE
+      ))
+    }
+}
+write_xlsx(results_df,"unfiltered_regression_results.xlsx")
+```
+
+

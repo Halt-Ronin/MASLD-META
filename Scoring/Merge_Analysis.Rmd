@@ -1,0 +1,582 @@
+---
+title: "Merge_Analysis"
+author: "Eren Kumak"
+date: "2025-10-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup, include=FALSE}
+library(readxl)
+library(writexl)
+library(dplyr)
+library(tidyr)  
+set.seed(42)
+```
+
+## NAS
+
+
+```{r}
+indiv_10 <- read_xlsx("Individual_Analysis_1_VS_0.xlsx")
+indiv_10 <- indiv_10[indiv_10$DE.invnorm == 1 & indiv_10$DE.fishercomb == 1,]
+#global_10 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_1_VS_0.csv")
+#global_10 <- global_10[global_10$padj < 0.05,]
+# indiv_10 <- indiv_10[indiv_10$Gene %in% global_10$X,]
+
+
+indiv_20 <- read_xlsx("Individual_Analysis_2_VS_0.xlsx")
+indiv_20 <- indiv_20[indiv_20$DE.invnorm == 1 & indiv_20$DE.fishercomb == 1,]
+# global_20 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_2_VS_0.csv")
+# global_20 <- global_20[global_20$padj < 0.05,]
+# indiv_20 <- indiv_20[indiv_20$Gene %in% global_20$X,]
+
+indiv_30 <- read_xlsx("Individual_Analysis_3_VS_0.xlsx")
+indiv_30 <- indiv_30[indiv_30$DE.invnorm == 1 & indiv_30$DE.fishercomb == 1,]
+# global_30 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_3_VS_0.csv")
+# global_30 <- global_30[global_30$padj < 0.05,]
+# indiv_30 <- indiv_30[indiv_30$Gene %in% global_30$X,]
+
+indiv_40 <- read_xlsx("Individual_Analysis_4_VS_0.xlsx")
+indiv_40 <- indiv_40[indiv_40$DE.invnorm == 1 & indiv_40$DE.fishercomb == 1,]
+# global_40 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_4_VS_0.csv")
+# global_40 <- global_40[global_40$padj < 0.05,]
+# indiv_40 <- indiv_40[indiv_40$Gene %in% global_40$X,]
+
+indiv_31 <- read_xlsx("Individual_Analysis_3_VS_1.xlsx")
+indiv_31 <- indiv_31[indiv_31$DE.invnorm == 1 & indiv_31$DE.fishercomb == 1,]
+# global_31 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_3_VS_1.csv")
+# global_31 <- global_31[global_31$padj < 0.05,]
+# indiv_31 <- indiv_31[indiv_31$Gene %in% global_31$X,]
+
+indiv_32 <- read_xlsx("Individual_Analysis_3_VS_2.xlsx")
+indiv_32 <- indiv_32[indiv_32$DE.invnorm == 1 & indiv_32$DE.fishercomb == 1,]
+# global_32 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_3_VS_2.csv")
+# global_32 <- global_32[global_32$padj < 0.05,]
+# indiv_32 <- indiv_32[indiv_32$Gene %in% global_32$X,]
+
+indiv_41 <- read_xlsx("Individual_Analysis_4_VS_1.xlsx")
+indiv_41 <- indiv_41[indiv_41$DE.invnorm == 1 & indiv_41$DE.fishercomb == 1,]
+# global_41 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_4_VS_1.csv")
+# global_41 <- global_41[global_41$padj < 0.05,]
+# indiv_41 <- indiv_41[indiv_41$Gene %in% global_41$X,]
+
+indiv_42 <- read_xlsx("Individual_Analysis_4_VS_2.xlsx")
+indiv_42 <- indiv_42[indiv_42$DE.invnorm == 1 & indiv_42$DE.fishercomb == 1,]
+# global_42 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_4_VS_2.csv")
+# global_42 <- global_42[global_42$padj < 0.05,]
+# indiv_42 <- indiv_42[indiv_42$Gene %in% global_42$X,]
+
+gene_list <- bind_rows(
+  indiv_10 %>% select(Gene),
+  indiv_20 %>% select(Gene),
+  indiv_30 %>% select(Gene),
+  indiv_40 %>% select(Gene),
+  indiv_31 %>% select(Gene),
+  indiv_32 %>% select(Gene),
+  indiv_41 %>% select(Gene),
+  indiv_42 %>% select(Gene)
+) %>% distinct()
+
+
+# Assuming your second dataframe is named sign_df
+gene_list <- gene_list %>%
+  left_join(indiv_10 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_1_vs_0 = signFC) %>%
+  mutate(indiv_1_vs_0 = replace_na(indiv_1_vs_0, 0))
+
+gene_list <- gene_list %>%
+  left_join(indiv_20 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_2_vs_0 = signFC) %>%
+  mutate(indiv_2_vs_0 = replace_na(indiv_2_vs_0, 0))
+
+gene_list <- gene_list %>%
+  left_join(indiv_30 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_3_vs_0 = signFC) %>%
+  mutate(indiv_3_vs_0 = replace_na(indiv_3_vs_0, 0))
+
+gene_list <- gene_list %>%
+  left_join(indiv_40 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_4_vs_0 = signFC) %>%
+  mutate(indiv_4_vs_0 = replace_na(indiv_4_vs_0, 0))
+
+gene_list$indiv_2_vs_1 <- 0
+
+gene_list <- gene_list %>%
+  left_join(indiv_31 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_3_vs_1 = signFC) %>%
+  mutate(indiv_3_vs_1 = replace_na(indiv_3_vs_1, 0))
+
+gene_list <- gene_list %>%
+  left_join(indiv_41 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_4_vs_1 = signFC) %>%
+  mutate(indiv_4_vs_1 = replace_na(indiv_4_vs_1, 0))
+
+gene_list <- gene_list %>%
+  left_join(indiv_32 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_3_vs_2 = signFC) %>%
+  mutate(indiv_3_vs_2 = replace_na(indiv_3_vs_2, 0))
+
+gene_list <- gene_list %>%
+  left_join(indiv_42 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_4_vs_2 = signFC) %>%
+  mutate(indiv_4_vs_2 = replace_na(indiv_4_vs_2, 0))
+
+gene_list$indiv_4_vs_3 <- 0
+
+write_xlsx(gene_list,"individual_analysis_overview_without_global.xlsx")
+```
+
+```{r}
+global_10 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_1_VS_0.csv")
+global_10 <- global_10[global_10$padj < 0.05,]
+colnames(global_10)[1] <- "Gene"
+global_10$signFC <- ifelse(global_10[,3] > 0, 1, -1)
+
+global_20 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_2_VS_0.csv")
+global_20 <- global_20[global_20$padj < 0.05,]
+colnames(global_20)[1] <- "Gene"
+global_20 $signFC <- ifelse(global_20 [,3] > 0, 1, -1)
+
+global_30 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_3_VS_0.csv")
+global_30 <- global_30[global_30$padj < 0.05,]
+colnames(global_30)[1] <- "Gene"
+global_30$signFC <- ifelse(global_30[,3] > 0, 1, -1)
+
+global_40 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_4_VS_0.csv")
+global_40 <- global_40[global_40$padj < 0.05,]
+colnames(global_40)[1] <- "Gene"
+global_40$signFC <- ifelse(global_40[,3] > 0, 1, -1)
+
+global_21 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_2_VS_1.csv")
+global_21 <- global_21[global_21$padj < 0.05,]
+colnames(global_21)[1] <- "Gene"
+global_21$signFC <- ifelse(global_21[,3] > 0, 1, -1)
+
+global_31 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_3_VS_1.csv")
+global_31 <- global_31[global_31$padj < 0.05,]
+colnames(global_31)[1] <- "Gene"
+global_31$signFC <- ifelse(global_31[,3] > 0, 1, -1)
+
+global_32 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_3_VS_2.csv")
+global_32 <- global_32[global_32$padj < 0.05,]
+colnames(global_32)[1] <- "Gene"
+global_32$signFC <- ifelse(global_32[,3] > 0, 1, -1)
+
+global_41 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_4_VS_1.csv")
+global_41 <- global_41[global_41$padj < 0.05,]
+colnames(global_41)[1] <- "Gene"
+global_41$signFC <- ifelse(global_41[,3] > 0, 1, -1)
+
+global_42 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_4_VS_2.csv")
+global_42 <- global_42[global_42$padj < 0.05,]
+colnames(global_42)[1] <- "Gene"
+global_42$signFC <- ifelse(global_42[,3] > 0, 1, -1)
+
+global_43 <- read.csv("GLOBAL/NAS_DESEQ2_GLOBAL_4_VS_3.csv")
+global_43 <- global_43[global_43$padj < 0.05,]
+colnames(global_43)[1] <- "Gene"
+global_43$signFC <- ifelse(global_43[,3] > 0, 1, -1)
+
+gene_list <- bind_rows(
+  global_10 %>% select(Gene),
+  global_20 %>% select(Gene),
+  global_30 %>% select(Gene),
+  global_40 %>% select(Gene),
+  global_21 %>% select(Gene),
+  global_31 %>% select(Gene),
+  global_32 %>% select(Gene),
+  global_41 %>% select(Gene),
+  global_42 %>% select(Gene),
+  global_43 %>% select(Gene)
+) %>% distinct()
+
+# Assuming your second dataframe is named sign_df
+gene_list <- gene_list %>%
+  left_join(global_10 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_1_vs_0 = signFC) %>%
+  mutate(global_1_vs_0 = replace_na(global_1_vs_0, 0))
+
+gene_list <- gene_list %>%
+  left_join(global_20 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_2_vs_0 = signFC) %>%
+  mutate(global_2_vs_0 = replace_na(global_2_vs_0, 0))
+
+gene_list <- gene_list %>%
+  left_join(global_30 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_3_vs_0 = signFC) %>%
+  mutate(global_3_vs_0 = replace_na(global_3_vs_0, 0))
+
+gene_list <- gene_list %>%
+  left_join(global_40 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_4_vs_0 = signFC) %>%
+  mutate(global_4_vs_0 = replace_na(global_4_vs_0, 0))
+
+gene_list <- gene_list %>%
+  left_join(global_21 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_2_vs_1 = signFC) %>%
+  mutate(global_2_vs_1 = replace_na(global_2_vs_1, 0))
+
+gene_list <- gene_list %>%
+  left_join(global_31 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_3_vs_1 = signFC) %>%
+  mutate(global_3_vs_1 = replace_na(global_3_vs_1, 0))
+
+gene_list <- gene_list %>%
+  left_join(global_41 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_4_vs_1 = signFC) %>%
+  mutate(global_4_vs_1 = replace_na(global_4_vs_1, 0))
+
+gene_list$global_3_vs_2 <- 0
+
+gene_list <- gene_list %>%
+  left_join(global_42 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_4_vs_2 = signFC) %>%
+  mutate(global_4_vs_2 = replace_na(global_4_vs_2, 0))
+
+gene_list <- gene_list %>%
+  left_join(global_43 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_4_vs_3 = signFC) %>%
+  mutate(global_4_vs_3 = replace_na(global_4_vs_3, 0))
+
+write_xlsx(gene_list,"global_analysis_overview.xlsx")
+```
+
+```{r}
+global <- read_xlsx("global_analysis_overview.xlsx")
+global$freq <- rowSums(abs(global[, 2:11]))
+
+individual <- read_xlsx("individual_analysis_overview_without_global.xlsx")
+individual$freq <- rowSums(abs(individual[, 2:11]))
+
+regression <- read_xlsx("unfiltered_regression_results.xlsx")
+
+GeneDiseasePattern <- read_xlsx("genediseasepatterns_merged_results.xlsx")
+colnames(GeneDiseasePattern)[1] <- "Gene"
+
+gene_list <- bind_rows(
+  global %>% select(Gene),
+  individual %>% select(Gene),
+  regression %>% select(Gene),
+  GeneDiseasePattern %>% select(Gene)
+) %>% distinct()
+
+# Assuming your second dataframe is named sign_df
+gene_list <- gene_list %>%
+  left_join(global %>% select(Gene, freq), by = "Gene") %>%
+  rename(global = freq) %>%
+  mutate(global = replace_na(global, 0))
+
+gene_list <- gene_list %>%
+  left_join(individual %>% select(Gene, freq), by = "Gene") %>%
+  rename(individual = freq) %>%
+  mutate(individual = replace_na(individual, 0))
+
+gene_list <- gene_list %>%
+  left_join(regression %>% select(Gene, Count), by = "Gene") %>%
+  rename(regression = Count) %>%
+  mutate(regression = replace_na(regression, 0))
+
+gene_list <- gene_list %>%
+  left_join(GeneDiseasePattern %>% select(Gene, Freq), by = "Gene") %>%
+  rename(GeneDiseasePattern = Freq) %>%
+  mutate(GeneDiseasePattern = replace_na(GeneDiseasePattern, 0))
+
+gene_list$total_score <- rowSums(abs(gene_list[, 2:5]))
+
+write_xlsx(gene_list,"overall_meta_analysis_overview.xlsx")
+```
+
+```{r}
+global <- read_xlsx("global_analysis_overview.xlsx")
+global$freq <- rowSums(abs(global[, 2:11]))
+global$upregulated <- rowSums(global == 1)
+global$downregulated <- rowSums(global == -1)
+
+individual <- read_xlsx("individual_analysis_overview_without_global.xlsx")
+individual$freq <- rowSums(abs(individual[, 2:11]))
+individual$upregulated <- rowSums(individual == 1)
+individual$downregulated <- rowSums(individual == -1)
+
+regression <- read_xlsx("unfiltered_regression_results.xlsx")
+
+GeneDiseasePattern <- read_xlsx("genediseasepatterns_merged_results.xlsx")
+colnames(GeneDiseasePattern)[1] <- "Gene"
+
+
+gene_list <- bind_rows(
+  global %>% select(Gene),
+  individual %>% select(Gene),
+  regression %>% select(Gene),
+  GeneDiseasePattern %>% select(Gene)
+) %>% distinct()
+
+
+# Assuming your second dataframe is named sign_df
+gene_list <- gene_list %>%
+  left_join(global %>% select(Gene, upregulated), by = "Gene") %>%
+  rename(global_upregulated = upregulated) %>%
+  mutate(global_upregulated = replace_na(global_upregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(global %>% select(Gene, downregulated), by = "Gene") %>%
+  rename(global_downregulated = downregulated) %>%
+  mutate(global_downregulated = replace_na(global_downregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(individual %>% select(Gene, upregulated), by = "Gene") %>%
+  rename(individual_upregulated = upregulated) %>%
+  mutate(individual_upregulated = replace_na(individual_upregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(individual %>% select(Gene, downregulated), by = "Gene") %>%
+  rename(individual_downregulated = downregulated) %>%
+  mutate(individual_downregulated = replace_na(individual_downregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(regression %>% select(Gene, Count_Positive), by = "Gene") %>%
+  rename(regression_upregulated = Count_Positive) %>%
+  mutate(regression_upregulated = replace_na(regression_upregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(regression %>% select(Gene, Count_Negative), by = "Gene") %>%
+  rename(regression_downregulated = Count_Negative) %>%
+  mutate(regression_downregulated = replace_na(regression_downregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(GeneDiseasePattern %>% select(Gene, ExpUp_Count), by = "Gene") %>%
+  rename(GeneDiseasePattern_upregulated = ExpUp_Count) %>%
+  mutate(GeneDiseasePattern_upregulated = replace_na(GeneDiseasePattern_upregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(GeneDiseasePattern %>% select(Gene, ExpDown_Count), by = "Gene") %>%
+  rename(GeneDiseasePattern_downregulated = ExpDown_Count) %>%
+  mutate(GeneDiseasePattern_downregulated = replace_na(GeneDiseasePattern_downregulated, 0))
+
+
+
+gene_list$total_upregulated <- rowSums(abs(gene_list[, c(2,4,6,8)]))
+gene_list$total_downregulated <- rowSums(abs(gene_list[, c(3,5,7,9)]))
+
+write_xlsx(gene_list,"overall_meta_analysis_overview_directions.xlsx")
+```
+
+## Fibrosis
+
+
+```{r}
+indiv_F2_F0 <- read_xlsx("individual/Individual_Analysis_F2_VS_F0_F1.xlsx")
+indiv_F2_F0 <- indiv_F2_F0[indiv_F2_F0$DE.invnorm == 1 & indiv_F2_F0$DE.fishercomb == 1,]
+
+indiv_F3_F0 <- read_xlsx("individual/Individual_Analysis_F3_VS_F0_F1.xlsx")
+indiv_F3_F0 <- indiv_F3_F0[indiv_F3_F0$DE.invnorm == 1 & indiv_F3_F0$DE.fishercomb == 1,]
+
+indiv_F3_F2 <- read_xlsx("individual/Individual_Analysis_F3_VS_F2.xlsx")
+indiv_F3_F2 <- indiv_F3_F2[indiv_F3_F2$DE.invnorm == 1 & indiv_F3_F2$DE.fishercomb == 1,]
+
+indiv_F4_F0 <- read_xlsx("individual/Individual_Analysis_F4_VS_F0_F1.xlsx")
+indiv_F4_F0 <- indiv_F4_F0[indiv_F4_F0$DE.invnorm == 1 & indiv_F4_F0$DE.fishercomb == 1,]
+
+indiv_F4_F2 <- read_xlsx("individual/Individual_Analysis_F4_VS_F2.xlsx")
+indiv_F4_F2 <- indiv_F4_F2[indiv_F4_F2$DE.invnorm == 1 & indiv_F4_F2$DE.fishercomb == 1,]
+
+indiv_F4_F3 <- read_xlsx("individual/Individual_Analysis_F4_VS_F3.xlsx")
+indiv_F4_F3 <- indiv_F4_F3[indiv_F4_F3$DE.invnorm == 1 & indiv_F4_F3$DE.fishercomb == 1,]
+
+
+gene_list <- bind_rows(
+  indiv_F2_F0 %>% select(Gene),
+  indiv_F3_F0 %>% select(Gene),
+  indiv_F3_F2 %>% select(Gene),
+  indiv_F4_F0 %>% select(Gene),
+  indiv_F4_F2 %>% select(Gene),
+  indiv_F4_F3 %>% select(Gene),
+) %>% distinct()
+
+
+# Assuming your second dataframe is named sign_df
+gene_list <- gene_list %>%
+  left_join(indiv_F2_F0 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_F2_vs_F0_F1 = signFC) %>%
+  mutate(indiv_F2_vs_F0_F1 = replace_na(indiv_F2_vs_F0_F1, 0))
+
+gene_list <- gene_list %>%
+  left_join(indiv_F3_F0 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_F3_vs_F0_F1 = signFC) %>%
+  mutate(indiv_F3_vs_F0_F1 = replace_na(indiv_F3_vs_F0_F1, 0))
+
+gene_list <- gene_list %>%
+  left_join(indiv_F3_F2 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_F3_vs_F2 = signFC) %>%
+  mutate(indiv_F3_vs_F2 = replace_na(indiv_F3_vs_F2, 0))
+
+gene_list <- gene_list %>%
+  left_join(indiv_F4_F0 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_F4_vs_F0_F1 = signFC) %>%
+  mutate(indiv_F4_vs_F0_F1 = replace_na(indiv_F4_vs_F0_F1, 0))
+
+gene_list <- gene_list %>%
+  left_join(indiv_F4_F2 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_F4_vs_F2 = signFC) %>%
+  mutate(indiv_F4_vs_F2 = replace_na(indiv_F4_vs_F2, 0))
+
+gene_list <- gene_list %>%
+  left_join(indiv_F4_F3 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(indiv_F4_vs_F3 = signFC) %>%
+  mutate(indiv_F4_vs_F3 = replace_na(indiv_F4_vs_F3, 0))
+
+write_xlsx(gene_list,"individual_analysis_overview_without_global.xlsx")
+```
+
+```{r}
+global_F2_F0 <- read.csv("GLOBAL/fibrosis_DESEQ2_GLOBAL_F2_VS_F0_F1.csv")
+global_F2_F0 <- global_F2_F0[global_F2_F0$padj < 0.05,]
+colnames(global_F2_F0)[1] <- "Gene"
+global_F2_F0$signFC <- ifelse(global_F2_F0[,3] > 0, 1, -1)
+
+global_F3_F0 <- read.csv("GLOBAL/fibrosis_DESEQ2_GLOBAL_F3_VS_F0_F1.csv")
+global_F3_F0 <- global_F3_F0[global_F3_F0$padj < 0.05,]
+colnames(global_F3_F0)[1] <- "Gene"
+global_F3_F0$signFC <- ifelse(global_F3_F0 [,3] > 0, 1, -1)
+
+global_F3_F2 <- read.csv("GLOBAL/fibrosis_DESEQ2_GLOBAL_F3_VS_F2.csv")
+global_F3_F2 <- global_F3_F2[global_F3_F2$padj < 0.05,]
+colnames(global_F3_F2)[1] <- "Gene"
+global_F3_F2$signFC <- ifelse(global_F3_F2[,3] > 0, 1, -1)
+
+global_F4_F0 <- read.csv("GLOBAL/fibrosis_DESEQ2_GLOBAL_F4_VS_F0_F1.csv")
+global_F4_F0 <- global_F4_F0[global_F4_F0$padj < 0.05,]
+colnames(global_F4_F0)[1] <- "Gene"
+global_F4_F0$signFC <- ifelse(global_F4_F0[,3] > 0, 1, -1)
+
+global_F4_F2 <- read.csv("GLOBAL/fibrosis_DESEQ2_GLOBAL_F4_VS_F2.csv")
+global_F4_F2 <- global_F4_F2[global_F4_F2$padj < 0.05,]
+colnames(global_F4_F2)[1] <- "Gene"
+global_F4_F2$signFC <- ifelse(global_F4_F2[,3] > 0, 1, -1)
+
+global_F4_F3 <- read.csv("GLOBAL/fibrosis_DESEQ2_GLOBAL_F4_VS_F3.csv")
+global_F4_F3 <- global_F4_F3[global_F4_F3$padj < 0.05,]
+colnames(global_F4_F3)[1] <- "Gene"
+global_F4_F3$signFC <- ifelse(global_F4_F3[,3] > 0, 1, -1)
+
+gene_list <- bind_rows(
+  global_F2_F0 %>% select(Gene),
+  global_F3_F0 %>% select(Gene),
+  global_F3_F2 %>% select(Gene),
+  global_F4_F0 %>% select(Gene),
+  global_F4_F2 %>% select(Gene),
+  global_F4_F3 %>% select(Gene)
+) %>% distinct()
+
+
+# Assuming your second dataframe is named sign_df
+gene_list <- gene_list %>%
+  left_join(global_F2_F0 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_F2_vs_F0_F1 = signFC) %>%
+  mutate(global_F2_vs_F0_F1 = replace_na(global_F2_vs_F0_F1, 0))
+
+gene_list <- gene_list %>%
+  left_join(global_F3_F0 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_F3_vs_F0_F1 = signFC) %>%
+  mutate(global_F3_vs_F0_F1 = replace_na(global_F3_vs_F0_F1, 0))
+
+gene_list <- gene_list %>%
+  left_join(global_F3_F2 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_F3_vs_F2 = signFC) %>%
+  mutate(global_F3_vs_F2 = replace_na(global_F3_vs_F2, 0))
+
+gene_list <- gene_list %>%
+  left_join(global_F4_F0 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_F4_vs_F0_F1 = signFC) %>%
+  mutate(global_F4_vs_F0_F1 = replace_na(global_F4_vs_F0_F1, 0))
+
+gene_list <- gene_list %>%
+  left_join(global_F4_F2 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_F4_vs_F2 = signFC) %>%
+  mutate(global_F4_vs_F2 = replace_na(global_F4_vs_F2, 0))
+
+gene_list <- gene_list %>%
+  left_join(global_F4_F3 %>% select(Gene, signFC), by = "Gene") %>%
+  rename(global_F4_vs_F3 = signFC) %>%
+  mutate(global_F4_vs_F3 = replace_na(global_F4_vs_F3, 0))
+
+write_xlsx(gene_list,"global_analysis_overview.xlsx")
+```
+
+```{r}
+global <- read_xlsx("global_analysis_overview.xlsx")
+global$freq <- rowSums(abs(global[, 2:7]))
+global$upregulated <- rowSums(global == 1)
+global$downregulated <- rowSums(global == -1)
+
+individual <- read_xlsx("individual_analysis_overview_without_global.xlsx")
+individual$freq <- rowSums(abs(individual[, 2:7]))
+individual$upregulated <- rowSums(individual == 1)
+individual$downregulated <- rowSums(individual == -1)
+
+regression <- read_xlsx("unfiltered_regression_results.xlsx")
+
+GeneDiseasePattern <- read_xlsx("genediseasepatterns_merged_results.xlsx")
+colnames(GeneDiseasePattern)[1] <- "Gene"
+
+
+gene_list <- bind_rows(
+  global %>% select(Gene),
+  individual %>% select(Gene),
+  regression %>% select(Gene),
+  GeneDiseasePattern %>% select(Gene)
+) %>% distinct()
+
+# Assuming your second dataframe is named sign_df
+gene_list <- gene_list %>%
+  left_join(global %>% select(Gene, upregulated), by = "Gene") %>%
+  rename(global_upregulated = upregulated) %>%
+  mutate(global_upregulated = replace_na(global_upregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(global %>% select(Gene, downregulated), by = "Gene") %>%
+  rename(global_downregulated = downregulated) %>%
+  mutate(global_downregulated = replace_na(global_downregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(individual %>% select(Gene, upregulated), by = "Gene") %>%
+  rename(individual_upregulated = upregulated) %>%
+  mutate(individual_upregulated = replace_na(individual_upregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(individual %>% select(Gene, downregulated), by = "Gene") %>%
+  rename(individual_downregulated = downregulated) %>%
+  mutate(individual_downregulated = replace_na(individual_downregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(regression %>% select(Gene, Count_Positive), by = "Gene") %>%
+  rename(regression_upregulated = Count_Positive) %>%
+  mutate(regression_upregulated = replace_na(regression_upregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(regression %>% select(Gene, Count_Negative), by = "Gene") %>%
+  rename(regression_downregulated = Count_Negative) %>%
+  mutate(regression_downregulated = replace_na(regression_downregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(GeneDiseasePattern %>% select(Gene, ExpUp_Count), by = "Gene") %>%
+  rename(GeneDiseasePattern_upregulated = ExpUp_Count) %>%
+  mutate(GeneDiseasePattern_upregulated = replace_na(GeneDiseasePattern_upregulated, 0))
+
+gene_list <- gene_list %>%
+  left_join(GeneDiseasePattern %>% select(Gene, ExpDown_Count), by = "Gene") %>%
+  rename(GeneDiseasePattern_downregulated = ExpDown_Count) %>%
+  mutate(GeneDiseasePattern_downregulated = replace_na(GeneDiseasePattern_downregulated, 0))
+
+
+
+gene_list$total_upregulated <- rowSums(abs(gene_list[, c(2,4,6,8)]))
+gene_list$total_downregulated <- rowSums(abs(gene_list[, c(3,5,7,9)]))
+gene_list$total <- gene_list$total_downregulated + gene_list$total_upregulated
+
+write_xlsx(gene_list,"overall_meta_analysis_overview_directions_fibrosis.xlsx")
+```
+
